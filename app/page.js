@@ -24,7 +24,7 @@ export default function Home() {
       endOpacity: 1,
     },
     step2: {
-      durationMs: 500,
+      durationMs: 5000,
       startScale: 0,
       endScale: 1.5,
       startRotationX: 0,
@@ -55,7 +55,7 @@ export default function Home() {
     step2StartGlowCoverage: 0.9, // 90% at start of step 2
     step2EndGlowCoverage: 1.0, // 100% at end of step 2
     step3EndGlowCoverage: 0.65, // 65% at end of step 3
-    stopTargetNumbers: [0, 0, 3], // Target numbers for each column
+    stopTargetNumbers: [9, 0, 1], // Target numbers for each column
     stopDelayAfterStep3Ms: 1000, // Delay before starting stop animation
     stopDurationMs: 2000, // Duration of stop animation
   });

@@ -771,10 +771,15 @@ export default function SlotMachineAnimation({
           targetNumbers = [7, 7, 7];
         }
         // Ensure we have a valid array with 3 elements, rounded to integers
+        // Use nullish coalescing to handle 0 as a valid value (not falsy)
+        const parseTargetNumber = (val) => {
+          const num = Number(val);
+          return isNaN(num) ? 7 : Math.max(0, Math.min(9, Math.round(num)));
+        };
         const TARGET_NUMBERS = [
-          Math.max(0, Math.min(9, Math.round(Number(targetNumbers[0]) || 7))),
-          Math.max(0, Math.min(9, Math.round(Number(targetNumbers[1]) || 7))),
-          Math.max(0, Math.min(9, Math.round(Number(targetNumbers[2]) || 7))),
+          parseTargetNumber(targetNumbers[0]),
+          parseTargetNumber(targetNumbers[1]),
+          parseTargetNumber(targetNumbers[2]),
         ];
 
         // Debug: Log target numbers only when they change

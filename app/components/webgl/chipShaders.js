@@ -212,7 +212,7 @@ export const chipFragmentShaderSource = `#version 300 es
     float epsilon = 1.0;
     bool isFrontOrBackFace = abs(distZ - halfDepth) < epsilon;
     
-    // Border detection and rendering with rounded corners
+    // Border detection and rendering with rounded corners - CHECK FIRST before any texture sampling
     // Border colors
     vec3 borderColorTopBottom = vec3(0.6235, 0.4118, 0.2431); // #9f6937
     vec3 borderColorCenter = vec3(0.9490, 0.8235, 0.6039); // #f2d29a
@@ -220,9 +220,9 @@ export const chipFragmentShaderSource = `#version 300 es
     // Calculate border width and radius in local space (scaled)
     float borderWidthLocal = u_borderWidth * u_scale;
     float borderRadiusLocal = u_borderRadius * u_scale;
-    bool inBorderRegion = false;
-    vec3 borderColor = borderColorTopBottom;
     
+    // Check border FIRST - before any texture operations
+    // This ensures the border/bezel is completely solid and nothing shows through
     if (isFrontOrBackFace) {
       // Calculate distance from each edge
       float distFromTop = halfHeight - localPos.y;
@@ -242,43 +242,42 @@ export const chipFragmentShaderSource = `#version 300 es
                       (distFromBottomLeftCorner < borderRadiusLocal && distFromBottom > 0.0 && distFromLeft > 0.0) ||
                       (distFromBottomRightCorner < borderRadiusLocal && distFromBottom > 0.0 && distFromRight > 0.0);
       
-      // Check if we're in top or bottom border (excluding corners)
-      bool inTopBorder = distFromTop < borderWidthLocal && distFromTop > 0.0 && 
-                         distFromLeft >= borderRadiusLocal && distFromRight >= borderRadiusLocal;
-      bool inBottomBorder = distFromBottom < borderWidthLocal && distFromBottom > 0.0 && 
-                            distFromLeft >= borderRadiusLocal && distFromRight >= borderRadiusLocal;
+      // Check if we're in top or bottom border area (full width)
+      // Top and bottom borders: solid color, nothing shows through
+      bool inTopBorderArea = distFromTop < borderWidthLocal && distFromTop > 0.0;
+      bool inBottomBorderArea = distFromBottom < borderWidthLocal && distFromBottom > 0.0;
       
-      // Check if we're in left or right border (but not in top/bottom border or corners)
+      // Check if we're in left or right border (but not in top/bottom border)
       bool inLeftBorder = distFromLeft < borderWidthLocal && distFromLeft > 0.0 && 
-                          !inTopBorder && !inBottomBorder && 
+                          !inTopBorderArea && !inBottomBorderArea && 
                           distFromTop >= borderRadiusLocal && distFromBottom >= borderRadiusLocal;
       bool inRightBorder = distFromRight < borderWidthLocal && distFromRight > 0.0 && 
-                           !inTopBorder && !inBottomBorder && 
+                           !inTopBorderArea && !inBottomBorderArea && 
                            distFromTop >= borderRadiusLocal && distFromBottom >= borderRadiusLocal;
+      
+      // Determine border color and return immediately - no texture sampling
+      vec3 borderColor = borderColorTopBottom;
       
       if (inCorner) {
         // Corner: use top/bottom color (solid)
-        inBorderRegion = true;
         borderColor = borderColorTopBottom;
-      } else if (inTopBorder || inBottomBorder) {
-        // Top/bottom border: solid color
-        inBorderRegion = true;
+      } else if (inTopBorderArea || inBottomBorderArea) {
+        // Top/bottom border: solid color (completely opaque, nothing shows through)
         borderColor = borderColorTopBottom;
       } else if (inLeftBorder || inRightBorder) {
         // Left/right border: gradient from top/bottom (#9f6937) to center (#f2d29a)
-        inBorderRegion = true;
-        
-        // Calculate Y position relative to center (-halfHeight to halfHeight)
         float yPos = localPos.y;
-        // Normalize to 0-1 where 0 = bottom, 0.5 = center, 1 = top
         float yNormalized = (yPos + halfHeight) / (halfHeight * 2.0);
-        // Calculate distance from center (0 at center, 1 at edges)
         float distFromCenter = abs(yNormalized - 0.5) * 2.0;
-        // Use exponential curve for gradient (similar to cell gradient)
-        // gradientFactor is high (close to 1) at center, low (close to 0) at edges
         float gradientFactor = exp(-8.0 * distFromCenter * distFromCenter);
-        // Blend: at center (gradientFactor=1) use centerColor, at edges (gradientFactor=0) use topBottomColor
         borderColor = mix(borderColorTopBottom, borderColorCenter, gradientFactor);
+      }
+      
+      // If we're in any border region, render solid border and return immediately
+      // This ensures nothing from the texture (scrolling numbers, separators) shows through
+      if (inCorner || inTopBorderArea || inBottomBorderArea || inLeftBorder || inRightBorder) {
+        fragColor = vec4(borderColor, v_opacity);
+        return;
       }
     }
     
@@ -286,7 +285,6 @@ export const chipFragmentShaderSource = `#version 300 es
     // Check if we're in a corner region and apply rounded corners
     if (isFrontOrBackFace) {
       // Calculate distance from the rounded rectangle edges
-      // For each corner, check if we're outside the rounded rectangle
       float cornerX = abs(localPos.x) - (halfWidth - borderRadiusLocal);
       float cornerY = abs(localPos.y) - (halfHeight - borderRadiusLocal);
       
@@ -300,12 +298,6 @@ export const chipFragmentShaderSource = `#version 300 es
           discard;
         }
       }
-    }
-    
-    // If in border region, render border and return early
-    if (inBorderRegion) {
-      fragColor = vec4(borderColor, v_opacity);
-      return;
     }
     
     // Adjust texture coordinates to exclude border area
@@ -423,25 +415,31 @@ export const chipFragmentShaderSource = `#version 300 es
     
     // Map chip adjusted UV.y (0-1) to the scrolled number in texture
     // Texture has numbers 0-9: 0 at top (V≈0.95), 9 at bottom (V≈0.05)
-    // Texture mapping: Number N center is at V = 1.0 - (N + 0.5) / 10.0
     // 
     // User reports: getting 9 for 0, rest everything is fine
     // For 1-9: (6.0 - scrollPosition + adjustedTexCoord.y) / 10.0 works
-    // For 0: need to fix the offset
+    // 
+    // The else formula for scrollPosition = 0: (6.0 - 0 + 0.5) / 10.0 = 0.65 (shows ~3-4)
+    // But user sees 9, which is at V ≈ 0.05
+    // This suggests maybe scrollPosition wraps or there's a different issue
     //
-    // When scrollPosition = 0, adjustedTexCoord.y = 0.5, we need V = 0.95 (number 0):
-    // 0.95 = (X - 0 + 0.5) / 10.0
-    // 9.5 = X + 0.5
-    // X = 9.0
-    //
-    // So for 0, we need offset 9.0
+    // Try checking if scrollPosition is very close to 0 (within threshold)
+    // or if it's close to 10 (which wraps to 0)
+    float scrollEpsilon = 0.1;
     float numberV;
-    if (scrollPosition < 0.5) {
-      // For 0: use offset 9.0 to get V = 0.95 (number 0)
-      numberV = (9.0 - scrollPosition + adjustedTexCoord.y) / 10.0;
+    
+    // Check if we're targeting 0 and scrollPosition is near 0 or near 10
+    bool isNearZero = scrollPosition < scrollEpsilon || scrollPosition > (10.0 - scrollEpsilon);
+    bool isTargetZero = targetNumber < 0.5;
+    
+    if (isTargetZero && isNearZero) {
+      // For target number 0 when scrollPosition is near 0 or 10: use offset 9.0
+      // Handle wrapping: if scrollPosition > 9.5, treat it as negative
+      float adjustedPos = scrollPosition > 9.5 ? scrollPosition - 10.0 : scrollPosition;
+      numberV = (adjustedPos + adjustedTexCoord.y) / 10.0;
     } else {
       // For 1-9: use offset 6.0 (works correctly)
-      numberV = (6.0 - scrollPosition + adjustedTexCoord.y) / 10.0;
+      numberV = (scrollPosition + adjustedTexCoord.y) / 10.0;
     }
     
     // Sample texture with number coordinates

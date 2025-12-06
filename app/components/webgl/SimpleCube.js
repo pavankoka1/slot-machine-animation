@@ -25,7 +25,6 @@ export default function SimpleCube({
   const textureRef = useRef(null);
   const anchorRectRef = useRef(null);
   const anchorCenterRef = useRef([0, 0]);
-  const startTimeRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -354,11 +353,6 @@ export default function SimpleCube({
         const program = programRef.current;
         if (!gl || !program) return;
 
-        // Initialize start time
-        if (startTimeRef.current === null) {
-          startTimeRef.current = timestamp;
-        }
-
         // Update anchor rect periodically
         updateAnchorRect();
 
@@ -370,6 +364,9 @@ export default function SimpleCube({
           chipWidth = anchorRectRef.current.width;
           chipHeight = anchorRectRef.current.height;
         }
+
+        // Store original BetSpot width for border calculation (before perspective scaling)
+        const originalBetSpotWidth = chipWidth;
 
         // Calculate scale factor to compensate for perspective projection
         // The perspective projection scales objects down, so we need to scale up to match BetSpot size
@@ -415,9 +412,8 @@ export default function SimpleCube({
         const centerX = anchorCenterRef.current[0];
         const centerY = anchorCenterRef.current[1];
 
-        // Calculate elapsed time for animation
-        const elapsed = timestamp - startTimeRef.current;
-        const time = elapsed / 1000.0; // Convert to seconds
+        // Calculate time for animation (use performance.now like SlotMachineAnimation)
+        const time = performance.now() / 1000.0; // Convert to seconds
 
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -443,20 +439,28 @@ export default function SimpleCube({
         gl.uniform1f(chipDepthLocation, chipDepth);
         gl.uniform1f(enableSlotAnimationLocation, 1.0); // Enable slot animation
         gl.uniform1f(timeLocation, time);
-        gl.uniform1f(scrollSpeedLocation, 10.0); // Default scroll speed
+        gl.uniform1f(scrollSpeedLocation, 10.0); // Scroll speed (match home page)
         gl.uniform1f(stopProgressLocation, 0.0); // Always scrolling
         gl.uniform3f(targetNumbersLocation, 0.0, 0.0, 0.0); // Not stopping
-        gl.uniform1f(borderWidthLocation, 20.0); // Border width
-        gl.uniform1f(borderRadiusLocation, 20.0); // Border radius
+
+        // Calculate border width as 5% of original BetSpot width (before perspective scaling)
+        // This ensures the border is proportional to the actual BetSpot size
+        const borderWidth = originalBetSpotWidth * 0.05;
+        const borderRadius = borderWidth; // Use same value for rounded corners
+
+        gl.uniform1f(borderWidthLocation, borderWidth);
+        gl.uniform1f(borderRadiusLocation, borderRadius);
         gl.uniform1f(glowEnabledLocation, 0.0); // Disable glow for now
         gl.uniform1f(glowIntensityLocation, 1.0);
         gl.uniform3f(glowColorLocation, 1.0, 0.84, 0.0); // Gold glow color
 
-        // Bind texture
-        if (textureRef.current) {
+        // Bind texture (must be bound before drawing)
+        if (textureRef.current && textureLocation !== null) {
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, textureRef.current);
           gl.uniform1i(textureLocation, 0);
+        } else {
+          console.warn("Texture not available or textureLocation is null");
         }
 
         // Bind position buffer

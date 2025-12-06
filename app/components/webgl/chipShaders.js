@@ -264,6 +264,14 @@ export const chipFragmentShaderSource = `#version 300 es
     
     // Slot animation enabled - continue with texture and border logic below
     
+    // For side faces, render base chip color and return (no slot animation on sides)
+    if (isSideFace) {
+      fragColor = vec4(u_color, v_opacity);
+      return;
+    }
+    
+    // Only front and back faces continue to slot animation logic below
+    
     // Calculate local position for border calculations (only when needed)
     // Get reverse rotation matrix to convert from world space to local space
     mat3 reverseRotation = rotateZ(-u_rotationZ) * rotateY(-u_rotationY) * rotateX(-u_rotationX);
@@ -521,9 +529,9 @@ export const chipFragmentShaderSource = `#version 300 es
     // Numbers are black, so we use texture alpha to blend
     vec3 chipColor = mix(baseColor, textureColor.rgb, textureColor.a);
     
+    // Slot animation is only rendered on front and back faces (side faces already returned above)
     // Only apply glow effect on front and back faces
-    // (isFrontOrBackFace is already defined above)
-    if (u_glowEnabled > 0.5 && isFrontOrBackFace) {
+    if (u_glowEnabled > 0.5) {
       // Create multiple random glow squares
       // Use UV coordinates for positioning
       vec2 uv = v_texCoord;

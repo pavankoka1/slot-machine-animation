@@ -15,7 +15,7 @@ export default function Home() {
     step1: {
       durationMs: 0,
       startScale: 0,
-      endScale: 0.5,
+      endScale: 0,
       startRotationX: -20,
       endRotationX: 0,
       startRotationY: -180,
@@ -24,7 +24,7 @@ export default function Home() {
       endOpacity: 1,
     },
     step2: {
-      durationMs: 5000,
+      durationMs: 500,
       startScale: 0,
       endScale: 1.5,
       startRotationX: 0,
@@ -45,7 +45,7 @@ export default function Home() {
       startOpacity: 1,
       endOpacity: 1,
     },
-    chipThickness: 100,
+    chipThickness: 20,
     color: { r: 166, g: 96, b: 37 },
     glowColor: { r: 255, g: 215, b: 0 },
     glowEnabled: false,

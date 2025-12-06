@@ -92,14 +92,20 @@ export default function SlotMachineAnimation({
     configRef.current = config;
   }, [config]);
 
-  // Update anchor position when anchorEl changes
+  // Update anchor position when anchorEl changes (same format as SimpleCube)
   useEffect(() => {
     if (anchorEl?.getBoundingClientRect) {
-      anchorRectRef.current = anchorEl.getBoundingClientRect();
+      const rect = anchorEl.getBoundingClientRect();
       const dpr = getDevicePixelRatio();
+      anchorRectRef.current = {
+        width: rect.width * dpr,
+        height: rect.height * dpr,
+        left: rect.left * dpr,
+        top: rect.top * dpr,
+      };
       anchorCenterRef.current = [
-        (anchorRectRef.current.left + anchorRectRef.current.width / 2) * dpr,
-        (anchorRectRef.current.top + anchorRectRef.current.height / 2) * dpr,
+        anchorRectRef.current.left + anchorRectRef.current.width / 2,
+        anchorRectRef.current.top + anchorRectRef.current.height / 2,
       ];
     } else {
       anchorRectRef.current = null;
@@ -446,16 +452,21 @@ export default function SlotMachineAnimation({
 
         gl.viewport(0, 0, canvas.width, canvas.height);
 
-        // Update anchor position
+        // Update anchor position (same as SimpleCube - account for device pixel ratio)
         if (anchorEl?.getBoundingClientRect) {
-          anchorRectRef.current = anchorEl.getBoundingClientRect();
+          const rect = anchorEl.getBoundingClientRect();
+          anchorRectRef.current = {
+            width: rect.width * dpr,
+            height: rect.height * dpr,
+            left: rect.left * dpr,
+            top: rect.top * dpr,
+          };
           anchorCenterRef.current = [
-            (anchorRectRef.current.left + anchorRectRef.current.width / 2) *
-              dpr,
-            (anchorRectRef.current.top + anchorRectRef.current.height / 2) *
-              dpr,
+            anchorRectRef.current.left + anchorRectRef.current.width / 2,
+            anchorRectRef.current.top + anchorRectRef.current.height / 2,
           ];
         } else {
+          anchorRectRef.current = null;
           anchorCenterRef.current = [(width * dpr) / 2, (height * dpr) / 2];
         }
       };
@@ -529,10 +540,42 @@ export default function SlotMachineAnimation({
           betSpotHeight = anchorRectRef.current.height;
         }
 
-        // Calculate chip dimensions relative to BetSpot
-        // Scale 1.0 = BetSpot width/height
-        const CHIP_WIDTH = betSpotWidth;
-        const CHIP_HEIGHT = betSpotHeight;
+        // Store original BetSpot width for border calculation (before perspective scaling)
+        const originalBetSpotWidth = betSpotWidth;
+        const originalBetSpotHeight = betSpotHeight;
+
+        // Calculate scale factor to compensate for perspective projection (same as SimpleCube)
+        // The perspective projection scales objects down, so we need to scale up to match BetSpot size
+        // Camera is at distance 1500, FOV is 45 degrees
+        const cameraZ = 1500.0;
+        const fov = 45.0;
+        const fovRad = (fov * Math.PI) / 180.0;
+        const fovFactor = 1.0 / Math.tan(fovRad * 0.5); // ≈ 2.414
+        const aspect = canvas.width / canvas.height;
+
+        // In the vertex shader:
+        // clipSpace.x = projected.x * f / aspect  (width is divided by aspect)
+        // clipSpace.y = -projected.y * f          (height is NOT divided by aspect)
+        // So we need to account for aspect ratio in width calculation
+
+        // Convert BetSpot size to clip space
+        const betSpotWidthInClipSpace = (betSpotWidth / canvas.width) * 2.0;
+        const betSpotHeightInClipSpace = (betSpotHeight / canvas.height) * 2.0;
+
+        // Calculate required 3D size
+        // For width: clipSpace.x = (3D_width / cameraZ) * fovFactor / aspect
+        // So: 3D_width = betSpotWidthInClipSpace * cameraZ * aspect / fovFactor
+        const requiredWidth3D =
+          (betSpotWidthInClipSpace * cameraZ * aspect) / fovFactor;
+
+        // For height: clipSpace.y = -(3D_height / cameraZ) * fovFactor
+        // So: 3D_height = betSpotHeightInClipSpace * cameraZ / fovFactor
+        const requiredHeight3D =
+          (betSpotHeightInClipSpace * cameraZ) / fovFactor;
+
+        // Scale the dimensions to match (with slight adjustment for height)
+        const CHIP_WIDTH = requiredWidth3D;
+        const CHIP_HEIGHT = requiredHeight3D * 0.98; // Slight reduction to match BetSpot height exactly
         const CHIP_DEPTH = currentConfig.chipThickness || 10;
 
         // Animation state variables
@@ -795,8 +838,12 @@ export default function SlotMachineAnimation({
           lastStopProgressRef.current = roundedProgress;
         }
 
-        gl.uniform1f(borderWidthLocation, 2.0); // 2px border
-        gl.uniform1f(borderRadiusLocation, 2.0); // 2px border radius
+        // Calculate border width as 5% of original BetSpot width (same as SimpleCube)
+        const borderWidth = originalBetSpotWidth * 0.05;
+        const borderRadius = borderWidth; // Use same value for rounded corners
+        
+        gl.uniform1f(borderWidthLocation, borderWidth);
+        gl.uniform1f(borderRadiusLocation, borderRadius);
         gl.uniform1f(
           enableSlotAnimationLocation,
           currentConfig.enableSlotAnimation !== false ? 1.0 : 0.0

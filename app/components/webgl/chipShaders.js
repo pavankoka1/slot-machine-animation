@@ -16,6 +16,7 @@ export const chipVertexShaderSource = `#version 300 es
   
   // Output to fragment shader
   out vec3 v_normal;
+  out vec3 v_normalOriginal; // Original normal before rotation (for face detection)
   out vec3 v_position;
   out vec2 v_texCoord;
   out float v_opacity;
@@ -54,46 +55,60 @@ export const chipVertexShaderSource = `#version 300 es
   void main() {
     // Scale the position by dimensions and then by scale factor
     // Geometry is unit size (-0.5 to 0.5), so we scale by dimensions first
-    // Slightly expand geometry to ensure faces overlap and prevent gaps
-    float expansionFactor = 1.01; // 1% expansion to ensure face overlap
     vec3 pos3D = vec3(
-      a_position.x * u_chipWidth * expansionFactor,
-      a_position.y * u_chipHeight * expansionFactor,
-      a_position.z * u_chipDepth * expansionFactor
+      a_position.x * u_chipWidth,
+      a_position.y * u_chipHeight,
+      a_position.z * u_chipDepth
     ) * u_scale;
     
-    // Apply rotations
+    // Apply rotations (cube rotates around its center at origin)
     mat3 rotationMatrix = rotateX(u_rotationX) * rotateY(u_rotationY) * rotateZ(u_rotationZ);
     vec3 rotatedPos3D = rotationMatrix * pos3D;
     
-    // Apply perspective projection for proper 3D effect
-    // Camera distance - adjust this to control perspective strength
-    float cameraDistance = 1000.0;
-    float perspective = cameraDistance / (cameraDistance - rotatedPos3D.z);
+    // Standard WebGL perspective projection (like MDN tutorial)
+    // Camera at (0, 0, -cameraZ) looking at (0, 0, 0)
+    // In camera space: translate by +cameraZ so camera is at origin
+    float cameraZ = 1500.0;
+    vec3 cameraSpace = vec3(rotatedPos3D.x, rotatedPos3D.y, rotatedPos3D.z + cameraZ);
     
-    // Convert to 2D screen position with perspective
-    vec2 screenPos = u_center + rotatedPos3D.xy * perspective;
+    // Perspective projection: divide by z
+    // For camera looking down +Z: (x/z, y/z)
+    float perspective = 1.0 / cameraSpace.z;
+    vec2 projected = cameraSpace.xy * perspective;
     
-    // Pass normal (rotated)
+    // Field of view scaling (like mat4.perspective)
+    float fov = 45.0;
+    float fovRad = radians(fov);
+    float f = 1.0 / tan(fovRad * 0.5);
+    float aspect = u_resolution.x / u_resolution.y;
+    
+    // Scale by FOV and convert to clip space [-1, 1]
+    vec2 clipSpace = vec2(
+      projected.x * f / aspect,
+      -projected.y * f
+    );
+    
+    // Apply center offset in screen space (convert from pixel coordinates to clip space)
+    // u_center is in pixel coordinates, convert to clip space [-1, 1]
+    vec2 centerOffset = vec2(
+      (u_center.x / u_resolution.x) * 2.0 - 1.0,
+      1.0 - (u_center.y / u_resolution.y) * 2.0
+    );
+    clipSpace = clipSpace + centerOffset;
+    
+    // Depth: standard perspective depth calculation
+    float near = 100.0;
+    float far = 3000.0;
+    float depth = ((far + near) / (far - near)) - ((2.0 * far * near) / ((far - near) * cameraSpace.z));
+    
+    // Pass normal (rotated) and original normal (for face detection)
     v_normal = rotationMatrix * normalize(a_normal);
+    v_normalOriginal = normalize(a_normal); // Original normal before rotation
     v_position = rotatedPos3D;
     v_texCoord = a_texCoord;
     v_opacity = u_opacity;
     
-    // Convert to clip space (WebGL Y-axis is inverted)
-    vec2 zeroToOne = screenPos / u_resolution;
-    vec2 zeroToTwo = zeroToOne * 2.0;
-    vec2 clipSpace = vec2(zeroToTwo.x - 1.0, 1.0 - zeroToTwo.y);
-    
-    // Calculate depth with proper perspective
-    // Use a linear depth calculation that works well with perspective
-    // Map Z from expected range to [0, 1] for depth buffer
-    float nearPlane = -500.0;
-    float farPlane = 500.0;
-    float normalizedZ = (rotatedPos3D.z - nearPlane) / (farPlane - nearPlane);
-    normalizedZ = clamp(normalizedZ, 0.0, 1.0);
-    
-    gl_Position = vec4(clipSpace, normalizedZ, 1.0);
+    gl_Position = vec4(clipSpace, depth, 1.0);
   }
 `;
 
@@ -118,8 +133,10 @@ export const chipFragmentShaderSource = `#version 300 es
   uniform mediump vec3 u_targetNumbers; // Target numbers for each column (0-9)
   uniform mediump float u_borderWidth; // Border width in pixels
   uniform mediump float u_borderRadius; // Border radius in pixels
+  uniform mediump float u_enableSlotAnimation; // 1.0 = enable slot animation, 0.0 = disable
   
   in vec3 v_normal;
+  in vec3 v_normalOriginal; // Original normal before rotation (for face detection)
   in vec3 v_position;
   in vec2 v_texCoord;
   in float v_opacity;
@@ -180,8 +197,75 @@ export const chipFragmentShaderSource = `#version 300 es
   }
   
   void main() {
+    // Detect which face we're on using the original normal (before rotation)
+    // This identifies which face this fragment belongs to
+    // Original normals: Front(0,0,1), Back(0,0,-1), Top(0,1,0), Bottom(0,-1,0), Right(1,0,0), Left(-1,0,0)
+    vec3 normalOrig = normalize(v_normalOriginal);
+    
+    // Use dot product to find which canonical direction this normal is closest to
+    vec3 frontDir = vec3(0.0, 0.0, 1.0);
+    vec3 backDir = vec3(0.0, 0.0, -1.0);
+    vec3 topDir = vec3(0.0, 1.0, 0.0);
+    vec3 bottomDir = vec3(0.0, -1.0, 0.0);
+    vec3 rightDir = vec3(1.0, 0.0, 0.0);
+    vec3 leftDir = vec3(-1.0, 0.0, 0.0);
+    
+    float dotFront = dot(normalOrig, frontDir);
+    float dotBack = dot(normalOrig, backDir);
+    float dotTop = dot(normalOrig, topDir);
+    float dotBottom = dot(normalOrig, bottomDir);
+    float dotRight = dot(normalOrig, rightDir);
+    float dotLeft = dot(normalOrig, leftDir);
+    
+    // Find which dot product is the maximum (closest to 1.0)
+    float maxDot = max(max(max(dotFront, dotBack), max(dotTop, dotBottom)), max(dotRight, dotLeft));
+    
+    // Use a small epsilon for floating point comparison
+    float epsilon = 0.01;
+    
+    // Determine which face based on which dot product is maximum
+    bool isFrontFace = abs(maxDot - dotFront) < epsilon && dotFront > 0.5;
+    bool isBackFace = abs(maxDot - dotBack) < epsilon && dotBack > 0.5;
+    bool isTopFace = abs(maxDot - dotTop) < epsilon && dotTop > 0.5;
+    bool isBottomFace = abs(maxDot - dotBottom) < epsilon && dotBottom > 0.5;
+    bool isRightFace = abs(maxDot - dotRight) < epsilon && dotRight > 0.5;
+    bool isLeftFace = abs(maxDot - dotLeft) < epsilon && dotLeft > 0.5;
+    
+    // Simple: Paint each face with a different color
+    // Front/back faces
+    bool isFrontOrBackFace = isFrontFace || isBackFace;
+    
+    // Side faces (top, bottom, left, right)
+    bool isSideFace = isTopFace || isBottomFace || isLeftFace || isRightFace;
+    
+    // Assign colors to each face
+    vec3 faceColor;
+    if (isFrontFace) {
+      faceColor = vec3(1.0, 0.0, 0.0); // Red - Front
+    } else if (isBackFace) {
+      faceColor = vec3(0.0, 1.0, 0.0); // Green - Back
+    } else if (isTopFace) {
+      faceColor = vec3(0.0, 0.0, 1.0); // Blue - Top
+    } else if (isBottomFace) {
+      faceColor = vec3(1.0, 1.0, 0.0); // Yellow - Bottom
+    } else if (isRightFace) {
+      faceColor = vec3(1.0, 0.0, 1.0); // Magenta - Right
+    } else if (isLeftFace) {
+      faceColor = vec3(0.0, 1.0, 1.0); // Cyan - Left
+    } else {
+      faceColor = vec3(0.5, 0.5, 0.5); // Gray - Fallback (shouldn't happen)
+    }
+    
+    // If slot animation is disabled, render debug colors
+    if (u_enableSlotAnimation < 0.5) {
+      fragColor = vec4(faceColor, v_opacity);
+      return;
+    }
+    
+    // Slot animation enabled - continue with texture and border logic below
+    
+    // Calculate local position for border calculations (only when needed)
     // Get reverse rotation matrix to convert from world space to local space
-    // Apply rotations in reverse order with reverse angles
     mat3 reverseRotation = rotateZ(-u_rotationZ) * rotateY(-u_rotationY) * rotateX(-u_rotationX);
     vec3 localPos = reverseRotation * v_position;
     
@@ -189,28 +273,6 @@ export const chipFragmentShaderSource = `#version 300 es
     float halfWidth = (u_chipWidth / 2.0) * u_scale;
     float halfHeight = (u_chipHeight / 2.0) * u_scale;
     float halfDepth = (u_chipDepth / 2.0) * u_scale;
-    
-    // Check if inside chip bounds
-    // Use a larger tolerance to prevent gaps at edges during rotation
-    // This accounts for precision issues and perspective projection artifacts
-    float boundsTolerance = 2.0;
-    float distX = abs(localPos.x);
-    float distY = abs(localPos.y);
-    float distZ = abs(localPos.z);
-    
-    // Calculate how far outside each dimension we are
-    float outsideX = max(0.0, distX - halfWidth);
-    float outsideY = max(0.0, distY - halfHeight);
-    float outsideZ = max(0.0, distZ - halfDepth);
-    
-    // If we're outside the bounds by more than tolerance, discard
-    if (outsideX > boundsTolerance || outsideY > boundsTolerance || outsideZ > boundsTolerance) {
-      discard;
-    }
-    
-    // Detect front or back face (Z edges) - used for both border and glow
-    float epsilon = 1.0;
-    bool isFrontOrBackFace = abs(distZ - halfDepth) < epsilon;
     
     // Border detection and rendering with rounded corners - CHECK FIRST before any texture sampling
     // Border colors
@@ -266,10 +328,15 @@ export const chipFragmentShaderSource = `#version 300 es
         borderColor = borderColorTopBottom;
       } else if (inLeftBorder || inRightBorder) {
         // Left/right border: gradient from top/bottom (#9f6937) to center (#f2d29a)
+        // Calculate Y position normalized to 0-1 (0 = bottom, 1 = top)
         float yPos = localPos.y;
         float yNormalized = (yPos + halfHeight) / (halfHeight * 2.0);
+        // Distance from center (0.5), normalized to 0-1 (0 = center, 1 = edge)
         float distFromCenter = abs(yNormalized - 0.5) * 2.0;
+        // Create smooth gradient: stronger at center, fades to edges
+        // Use exponential falloff for smooth transition
         float gradientFactor = exp(-8.0 * distFromCenter * distFromCenter);
+        // Mix from darker color (top/bottom) to lighter color (center)
         borderColor = mix(borderColorTopBottom, borderColorCenter, gradientFactor);
       }
       
@@ -357,89 +424,90 @@ export const chipFragmentShaderSource = `#version 300 es
     // Scroll continuously through numbers 0-9
     float continuousScrollPosition = mod(u_time * baseSpeed * speedMultiplier * u_scrollSpeed + timeOffset, 10.0);
     
-    // Calculate target position for this column (0-9)
-    // Target number is stored in u_targetNumbers based on column index
-    float targetNumber = 0.0;
-    if (columnIndex < 0.5) {
-      targetNumber = u_targetNumbers.x;
-    } else if (columnIndex < 1.5) {
-      targetNumber = u_targetNumbers.y;
+    // If stopProgress is 0.0, we're in continuous scrolling mode - no easing needed
+    float scrollPosition;
+    if (u_stopProgress < 0.001) {
+      // Continuous scrolling - use continuous position directly
+      scrollPosition = continuousScrollPosition;
     } else {
-      targetNumber = u_targetNumbers.z;
+      // Stopping animation - apply easing to target
+      // Calculate target position for this column (0-9)
+      float targetNumber = 0.0;
+      if (columnIndex < 0.5) {
+        targetNumber = u_targetNumbers.x;
+      } else if (columnIndex < 1.5) {
+        targetNumber = u_targetNumbers.y;
+      } else {
+        targetNumber = u_targetNumbers.z;
+      }
+      
+      float targetScrollPosition = targetNumber;
+      
+      // Ultra-smooth easing function: ease-out with very smooth deceleration
+      float t = clamp(u_stopProgress, 0.0, 1.0);
+      float smoothEase = 1.0 - pow(1.0 - t, 5.0);
+      float easedProgress = smoothstep(0.0, 1.0, smoothEase);
+      
+      // Apply additional smoothing in the final 30%
+      if (t > 0.7) {
+        float finalT = (t - 0.7) / 0.3;
+        float finalEase = 1.0 - pow(1.0 - finalT, 6.0);
+        float finalSmooth = smoothstep(0.0, 1.0, finalEase);
+        easedProgress = mix(easedProgress, finalSmooth, smoothstep(0.7, 1.0, t));
+      }
+      
+      // Calculate the shortest path to target (handle wrapping around 0-10)
+      float diff = targetScrollPosition - continuousScrollPosition;
+      if (diff > 5.0) {
+        diff = diff - 10.0;
+      } else if (diff < -5.0) {
+        diff = diff + 10.0;
+      }
+      
+      // Interpolate with easing
+      scrollPosition = continuousScrollPosition + diff * easedProgress;
+      scrollPosition = mod(scrollPosition + 10.0, 10.0);
     }
-    
-    // Convert target number to scroll position
-    // User reports: input [1,2,3] shows [8,7,6], meaning output = 9 - input
-    // After trying different combinations, the fix is:
-    // - targetScrollPosition = targetNumber (NOT inverted)
-    // - numberV = (9.0 - scrollPosition + adjustedTexCoord.y) / 10.0 (inverted)
-    float targetScrollPosition = targetNumber;
-    
-    // Ultra-smooth easing function: ease-out with very smooth deceleration
-    float t = clamp(u_stopProgress, 0.0, 1.0);
-    
-    // Use a very smooth ease-out curve that prevents any glitches
-    // Ease-out quintic for smooth deceleration
-    float smoothEase = 1.0 - pow(1.0 - t, 5.0);
-    
-    // Add extra smoothing throughout, especially near the end
-    // Use smoothstep for ultra-smooth interpolation
-    float easedProgress = smoothstep(0.0, 1.0, smoothEase);
-    
-    // Apply additional smoothing in the final 30% to prevent any sudden changes
-    if (t > 0.7) {
-      float finalT = (t - 0.7) / 0.3; // Normalize to 0-1 for final 30%
-      // Use even smoother easing for the final portion
-      float finalEase = 1.0 - pow(1.0 - finalT, 6.0);
-      float finalSmooth = smoothstep(0.0, 1.0, finalEase);
-      // Blend between normal easing and final easing
-      easedProgress = mix(easedProgress, finalSmooth, smoothstep(0.7, 1.0, t));
-    }
-    
-    // Calculate the shortest path to target (handle wrapping around 0-10)
-    float diff = targetScrollPosition - continuousScrollPosition;
-    
-    // Normalize difference to shortest path (-5 to 5 range)
-    if (diff > 5.0) {
-      diff = diff - 10.0;
-    } else if (diff < -5.0) {
-      diff = diff + 10.0;
-    }
-    
-    // Interpolate with ultra-smooth easing - use easedProgress directly
-    // This ensures very smooth transition without sudden jumps
-    float scrollPosition = continuousScrollPosition + diff * easedProgress;
-    
-    // Wrap to 0-10 range with smooth wrapping
-    scrollPosition = mod(scrollPosition + 10.0, 10.0);
     
     // Map chip adjusted UV.y (0-1) to the scrolled number in texture
     // Texture has numbers 0-9: 0 at top (V≈0.95), 9 at bottom (V≈0.05)
-    // 
-    // User reports: getting 9 for 0, rest everything is fine
-    // For 1-9: (6.0 - scrollPosition + adjustedTexCoord.y) / 10.0 works
-    // 
-    // The else formula for scrollPosition = 0: (6.0 - 0 + 0.5) / 10.0 = 0.65 (shows ~3-4)
-    // But user sees 9, which is at V ≈ 0.05
-    // This suggests maybe scrollPosition wraps or there's a different issue
-    //
-    // Try checking if scrollPosition is very close to 0 (within threshold)
-    // or if it's close to 10 (which wraps to 0)
+    // Numbers should scroll DOWN (from 0 to 9, top to bottom on screen)
+    // Current formula makes numbers go UP, so we need to reverse by subtracting scrollPosition
     float scrollEpsilon = 0.1;
     float numberV;
-    
-    // Check if we're targeting 0 and scrollPosition is near 0 or near 10
-    bool isNearZero = scrollPosition < scrollEpsilon || scrollPosition > (10.0 - scrollEpsilon);
-    bool isTargetZero = targetNumber < 0.5;
-    
-    if (isTargetZero && isNearZero) {
-      // For target number 0 when scrollPosition is near 0 or 10: use offset 9.0
-      // Handle wrapping: if scrollPosition > 9.5, treat it as negative
-      float adjustedPos = scrollPosition > 9.5 ? scrollPosition - 10.0 : scrollPosition;
-      numberV = (adjustedPos + adjustedTexCoord.y) / 10.0;
+    if (u_stopProgress < 0.001) {
+      // Continuous scrolling - numbers scroll DOWN (reverse direction)
+      // Subtract scrollPosition to reverse the direction
+      numberV = (adjustedTexCoord.y - scrollPosition) / 10.0;
+      // Wrap around if negative
+      if (numberV < 0.0) {
+        numberV = numberV + 1.0;
+      }
     } else {
-      // For 1-9: use offset 6.0 (works correctly)
-      numberV = (scrollPosition + adjustedTexCoord.y) / 10.0;
+      // Stopping animation - handle special case for number 0
+      bool isNearZero = scrollPosition < scrollEpsilon || scrollPosition > (10.0 - scrollEpsilon);
+      float targetNumber = 0.0;
+      if (columnIndex < 0.5) {
+        targetNumber = u_targetNumbers.x;
+      } else if (columnIndex < 1.5) {
+        targetNumber = u_targetNumbers.y;
+      } else {
+        targetNumber = u_targetNumbers.z;
+      }
+      bool isTargetZero = targetNumber < 0.5;
+      
+      // Reverse direction for stopping animation too
+      float reversedScrollPos = 10.0 - scrollPosition;
+      if (isTargetZero && isNearZero) {
+        float adjustedPos = reversedScrollPos > 9.5 ? reversedScrollPos - 10.0 : reversedScrollPos;
+        numberV = (adjustedTexCoord.y - adjustedPos) / 10.0;
+      } else {
+        numberV = (adjustedTexCoord.y - reversedScrollPos) / 10.0;
+      }
+      // Wrap around
+      if (numberV < 0.0) {
+        numberV = numberV + 1.0;
+      }
     }
     
     // Sample texture with number coordinates

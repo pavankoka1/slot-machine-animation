@@ -348,10 +348,45 @@ export const chipFragmentShaderSource = `#version 300 es
         borderColor = mix(borderColorTopBottom, borderColorCenter, gradientFactor);
       }
       
-      // If we're in any border region, render solid border and return immediately
-      // This ensures nothing from the texture (scrolling numbers, separators) shows through
+      // If we're in any border region, apply glow if enabled, then render border
       if (inCorner || inTopBorderArea || inBottomBorderArea || inLeftBorder || inRightBorder) {
-        fragColor = vec4(borderColor, v_opacity);
+        vec3 finalBorderColor = borderColor;
+        
+        // Apply glow to borders if enabled
+        if (u_glowEnabled > 0.5) {
+          // Calculate glow for border area using local position
+          float originalHalfWidth = u_chipWidth / 2.0;
+          float originalHalfHeight = u_chipHeight / 2.0;
+          
+          // Normalize local position to 0-1 range (center at 0.5, 0.5)
+          vec2 normalizedPos = vec2(
+            (localPos.x + originalHalfWidth) / (originalHalfWidth * 2.0),
+            (localPos.y + originalHalfHeight) / (originalHalfHeight * 2.0)
+          );
+          
+          vec2 center = vec2(0.5, 0.5);
+          vec2 distFromCenter = abs(normalizedPos - center);
+          
+          float xSpreadRate = 5.0;
+          float ySpreadRate = 2.0;
+          float coverageX = max(u_glowIntensity * xSpreadRate, 0.001);
+          float coverageY = max(u_glowIntensity * ySpreadRate, 0.001);
+          
+          float distInCoverageX = distFromCenter.x / coverageX;
+          float distInCoverageY = distFromCenter.y / coverageY;
+          float distInCoverage = max(distInCoverageX, distInCoverageY);
+          
+          float glowFactor = 1.0 - smoothstep(0.0, 1.0, clamp(distInCoverage, 0.0, 1.0));
+          float opacityExponent = 1.2;
+          float baseGlowOpacity = pow(clamp(u_glowIntensity, 0.0, 1.0), 1.0 / opacityExponent);
+          float glowOpacity = baseGlowOpacity * glowFactor * 4.0;
+          glowOpacity = clamp(glowOpacity, 0.0, 1.0);
+          
+          // Mix border color with glow
+          finalBorderColor = mix(borderColor, u_glowColor, glowOpacity);
+        }
+        
+        fragColor = vec4(finalBorderColor, v_opacity);
         return;
       }
     }
@@ -526,58 +561,178 @@ export const chipFragmentShaderSource = `#version 300 es
     }
     
     // Sample texture with number coordinates
+    // Texture now ONLY contains numbers (transparent background)
     vec2 numberUV = vec2(columnU, numberV);
     vec4 textureColor = texture(u_texture, numberUV);
     
     // Base chip color
     vec3 baseColor = u_color;
     
-    // Mix texture (numbers) with base color
-    // Numbers are black, so we use texture alpha to blend
-    vec3 chipColor = mix(baseColor, textureColor.rgb, textureColor.a);
+    // Render SINGLE linear gradient background across entire slot animation area
+    // Gradient colors: top/bottom = #ab7437 (171, 116, 55), center = #fcf2cc (252, 242, 204)
+    vec3 topBottomColor = vec3(171.0 / 255.0, 116.0 / 255.0, 55.0 / 255.0);
+    vec3 centerColor = vec3(252.0 / 255.0, 242.0 / 255.0, 204.0 / 255.0);
     
-    // Slot animation is only rendered on front and back faces (side faces already returned above)
-    // Only apply glow effect on front and back faces
-    if (u_glowEnabled > 0.5) {
-      // Create multiple random glow squares
-      // Use UV coordinates for positioning
-      vec2 uv = v_texCoord;
-      
-      float totalGlow = 0.0;
-      int numGlowSquares = 5;
-      
-      // Calculate square size: half the chip length in UV space
-      // Chip dimensions are in pixels, but we work in UV space (0-1)
-      // Half the chip width in UV space = 0.5
-      float glowSize = 0.5; // Half the chip length
-      
-      for (int i = 0; i < 5; i++) {
-        // Generate pseudo-random positions based on time and index
-        float idx = float(i);
-        vec2 seed = vec2(u_time * 0.3 + idx * 7.3, idx * 11.7);
-        vec2 glowCenter = vec2(
-          random(seed),
-          random(seed + vec2(1.0, 0.0))
-        );
-        
-        // Random time offset for pulsing
-        float timeOffset = random(seed + vec2(2.0, 3.0)) * 6.28;
-        
-        totalGlow += getGlowSquareIntensity(uv, glowCenter, glowSize, timeOffset);
-      }
+    // Calculate Y position within the slot animation area (0-1, where 0.5 is center)
+    float innerHeight = 1.0 - 2.0 * borderHeightUV;
+    float normalizedY = (adjustedTexCoord.y - borderHeightUV) / innerHeight;
     
-      // Clamp total glow intensity
-      totalGlow = clamp(totalGlow, 0.0, 1.0);
-      
-      // Apply glow: use glowIntensity directly (0.0 = no glow, 1.0 = 100% opacity flash)
-      // When glowIntensity is 1.0, the glow color completely replaces the chip color in glowing areas
-      float glowOpacity = clamp(u_glowIntensity, 0.0, 1.0);
-      vec3 glowColor = mix(chipColor, u_glowColor, glowOpacity * totalGlow);
-      
-      fragColor = vec4(glowColor, v_opacity);
-    } else {
-      // Other faces render normally
-      fragColor = vec4(chipColor, v_opacity);
+    // Single linear gradient: distance from center (0.5)
+    float distanceFromCenter = abs(normalizedY - 0.5) * 2.0; // 0 at center, 1 at edges
+    
+    // Exponential gradient: e^(-8 * distance^2)
+    float exponentialFactor = exp(-8.0 * distanceFromCenter * distanceFromCenter);
+    
+    // Blend between top/bottom color and center color
+    vec3 gradientColor = mix(topBottomColor, centerColor, exponentialFactor);
+    
+    // Draw 2 vertical separator lines dividing into 3 equal columns
+    // Separator color: #8b6f47 (139, 111, 71)
+    vec3 separatorColor = vec3(139.0 / 255.0, 111.0 / 255.0, 71.0 / 255.0);
+    float separatorThickness = 1.0 / (originalHalfWidth * 2.0);
+    
+    // Use already calculated innerWidth and normalizedX from above (for column detection)
+    
+    // Column boundaries: 1/3 and 2/3
+    float col1Boundary = 1.0 / 3.0;
+    float col2Boundary = 2.0 / 3.0;
+    
+    // Check if we're in a separator line
+    bool inSeparator1 = abs(normalizedX - col1Boundary) < separatorThickness;
+    bool inSeparator2 = abs(normalizedX - col2Boundary) < separatorThickness;
+    
+    // Start with gradient background
+    vec3 chipColor = gradientColor;
+    
+    // Draw separators on top of gradient
+    if (inSeparator1 || inSeparator2) {
+      chipColor = separatorColor;
     }
+    
+    // Apply numbers on top (texture only contains numbers now)
+    // Numbers are black, so we use texture alpha to blend
+    chipColor = mix(chipColor, textureColor.rgb, textureColor.a);
+    
+    // Calculate glow as a separate layer that will be applied on top
+    vec3 glowLayer = vec3(0.0); // Separate glow layer
+    if (u_glowEnabled > 0.5) {
+      // New glow system: spreads from center with different rates on X/Y axes
+      // Reuse already calculated innerWidth and innerHeight
+      float innerHeight = 1.0 - 2.0 * borderHeightUV;
+      
+      // Normalize adjustedTexCoord to [0, 1] range for glow calculation
+      vec2 normalizedGlowUV = vec2(
+        normalizedX, // Reuse already calculated normalizedX
+        (adjustedTexCoord.y - borderHeightUV) / innerHeight
+      );
+      
+      // Center is at 0.5, 0.5 in normalized space
+      vec2 center = vec2(0.5, 0.5);
+      vec2 distFromCenter = abs(normalizedGlowUV - center);
+      
+      // Glow spread rates
+      float xSpreadRate = 5.0; // Fast spread on X axis
+      float ySpreadRate = 2.0; // Slow spread on Y axis
+      
+      // Calculate coverage based on intensity
+      float coverageX = max(u_glowIntensity * xSpreadRate, 0.001);
+      float coverageY = max(u_glowIntensity * ySpreadRate, 0.001);
+      
+      // Calculate distance in coverage space (elliptical)
+      float distInCoverageX = distFromCenter.x / coverageX;
+      float distInCoverageY = distFromCenter.y / coverageY;
+      float distInCoverage = max(distInCoverageX, distInCoverageY);
+      
+      // Calculate glow factor (1.0 at center, 0.0 at edge)
+      float glowFactor = 1.0 - smoothstep(0.0, 1.0, clamp(distInCoverage, 0.0, 1.0));
+      glowFactor = max(0.0, glowFactor);
+      
+      // Calculate glow opacity with subtle, gradual gradient increase
+      // Use a smooth curve that starts subtle and gradually increases
+      float glowOpacity = u_glowIntensity * glowFactor;
+      
+      // Apply a gentle exponential curve for subtle gradient effect
+      // This makes the glow appear gradually as intensity increases
+      // Lower exponent = more gradual/subtle transition
+      float opacityExponent = 1.5; // Gradual curve
+      glowOpacity = pow(glowOpacity, 1.0 / opacityExponent);
+      
+      // Scale for subtlety - make it visible but gradual
+      // The glow should be visible but subtle, gradually increasing with intensity
+      glowOpacity = glowOpacity * 1.2; // Visible multiplier
+      glowOpacity = clamp(glowOpacity, 0.0, 1.0);
+      
+      // Create glow layer with subtle application
+      // The color will blend gradually as intensity increases
+      glowLayer = u_glowColor * glowOpacity;
+      
+      // Handle number texture partial glow effect
+      // Check if we're in a number area
+      bool isNumberArea = textureColor.a > 0.5;
+      
+      if (isNumberArea) {
+        // Detect number edges
+        float texelSize = 1.0 / 900.0;
+        float alphaCenter = textureColor.a;
+        float alphaRight = texture(u_texture, numberUV + vec2(texelSize, 0.0)).a;
+        float alphaLeft = texture(u_texture, numberUV + vec2(-texelSize, 0.0)).a;
+        float alphaUp = texture(u_texture, numberUV + vec2(0.0, texelSize)).a;
+        float alphaDown = texture(u_texture, numberUV + vec2(0.0, -texelSize)).a;
+        
+        float gradX = abs(alphaRight - alphaLeft);
+        float gradY = abs(alphaUp - alphaDown);
+        float gradientMagnitude = sqrt(gradX * gradX + gradY * gradY);
+        
+        float edgeFactor = clamp(gradientMagnitude * 10.0, 0.0, 1.0);
+        float alphaBasedEdgeDist = 1.0 - smoothstep(0.0, 1.0, alphaCenter);
+        float numberEdgeDist = mix(alphaBasedEdgeDist, edgeFactor, 0.5);
+        
+        // Define zones: Inner 60%, Middle 20%, Outer 20%
+        float innerZone = 0.4;
+        float outerZone = 0.6;
+        
+        float numberGlowFactor = 0.0;
+        if (numberEdgeDist < innerZone) {
+          // Inner 60%: no glow
+          numberGlowFactor = 0.0;
+        } else if (numberEdgeDist < outerZone) {
+          // Middle 20%: linear transition
+          float t = (numberEdgeDist - innerZone) / (outerZone - innerZone);
+          numberGlowFactor = t;
+        } else {
+          // Outer 20%: full glow
+          numberGlowFactor = 1.0;
+        }
+        
+        // Apply number-specific glow factor to the glow layer
+        glowLayer = glowLayer * numberGlowFactor;
+      }
+    }
+    
+    // Apply glow layer on top of chipColor with subtle, gradual gradient blending
+    // Use screen blend + additive for visible but subtle glow effect
+    vec3 finalColor = chipColor;
+    if (u_glowEnabled > 0.5) {
+      // Screen blend: makes glow more visible on dark areas
+      // This creates a subtle, gradual effect
+      vec3 screenBlend = 1.0 - (1.0 - chipColor) * (1.0 - glowLayer);
+      
+      // Scale the glow layer based on intensity for gradual appearance
+      // At low intensity, glow is more subtle; at high intensity, more visible
+      float intensityFactor = smoothstep(0.0, 1.0, u_glowIntensity);
+      float glowScale = 0.3 + (intensityFactor * 0.5); // Range: 0.3 to 0.8 for subtlety
+      
+      // Apply screen blend with scaled glow for gradual effect
+      vec3 scaledGlowLayer = glowLayer * glowScale;
+      vec3 screenBlendScaled = 1.0 - (1.0 - chipColor) * (1.0 - scaledGlowLayer);
+      
+      // Add a small amount of direct additive for extra subtlety
+      // This creates a gentle gradient effect
+      finalColor = screenBlendScaled + scaledGlowLayer * 0.2; // Small additive (20%)
+      finalColor = clamp(finalColor, 0.0, 1.0);
+    }
+    
+    // Final output
+    fragColor = vec4(finalColor, v_opacity);
   }
 `;

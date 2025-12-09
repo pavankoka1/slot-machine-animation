@@ -45,12 +45,12 @@ export default function Home() {
       startOpacity: 1,
       endOpacity: 1,
     },
-    chipThickness: 20,
+    chipThickness: 60,
     color: { r: 166, g: 96, b: 37 },
     glowColor: { r: 255, g: 215, b: 0 },
     glowEnabled: false,
     glowIntensity: 1,
-    scrollSpeed: 10,
+    scrollSpeed: 50,
     glowFadeDurationMs: 1000,
     step2StartGlowCoverage: 0.9, // 90% at start of step 2
     step2EndGlowCoverage: 1.0, // 100% at end of step 2

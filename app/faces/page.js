@@ -12,6 +12,11 @@ export default function FacesPage() {
   const [anchorEl, setAnchorEl] = useState(null);
   const betspotRef = useRef(null);
 
+  // Glow config
+  const [glowEnabled, setGlowEnabled] = useState(true);
+  const [glowIntensity, setGlowIntensity] = useState(0.1); // 0.0 to 1.0 (0% to 100%)
+  const [glowColor, setGlowColor] = useState({ r: 255, g: 215, b: 0 }); // Gold color
+
   useEffect(() => {
     if (betspotRef.current) {
       setAnchorEl(betspotRef.current);
@@ -34,6 +39,9 @@ export default function FacesPage() {
         thickness={100}
         color={{ r: 166, g: 96, b: 37 }}
         targetNumbers={[9, 0, 1]}
+        glowEnabled={glowEnabled}
+        glowIntensity={glowIntensity}
+        glowColor={glowColor}
       />
 
       {/* Controls Panel */}
@@ -163,6 +171,169 @@ export default function FacesPage() {
           >
             Reset All Rotations
           </button>
+        </Box>
+      </Box>
+
+      {/* Glow Controls Panel */}
+      <Box
+        sx={{
+          position: "fixed",
+          top: 24,
+          left: 24,
+          width: 300,
+          bgcolor: "rgba(255, 255, 255, 0.95)",
+          backdropFilter: "blur(10px)",
+          borderRadius: 2,
+          p: 3,
+          boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+          zIndex: 1000,
+        }}
+      >
+        <Typography variant="h6" gutterBottom sx={{ mb: 3, fontWeight: 600 }}>
+          Glow Controls
+        </Typography>
+
+        {/* Glow Enabled Toggle */}
+        <Box sx={{ mb: 3 }}>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={glowEnabled}
+              onChange={(e) => setGlowEnabled(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              Enable Glow
+            </Typography>
+          </label>
+        </Box>
+
+        {/* Glow Intensity */}
+        <Box sx={{ mb: 3 }}>
+          <Typography
+            variant="body2"
+            gutterBottom
+            sx={{ mb: 1, fontWeight: 500 }}
+          >
+            Glow Intensity: {Math.round(glowIntensity * 100)}%
+          </Typography>
+          <Slider
+            value={glowIntensity}
+            onChange={(e, newValue) => setGlowIntensity(newValue)}
+            min={0}
+            max={1}
+            step={0.01}
+            marks={[
+              { value: 0, label: "0%" },
+              { value: 0.5, label: "50%" },
+              { value: 1, label: "100%" },
+            ]}
+            valueLabelDisplay="auto"
+            valueLabelFormat={(value) => `${Math.round(value * 100)}%`}
+            sx={{
+              "& .MuiSlider-thumb": {
+                bgcolor: "#a66025",
+              },
+              "& .MuiSlider-track": {
+                bgcolor: "#a66025",
+              },
+            }}
+          />
+        </Box>
+
+        {/* Glow Color - RGB Controls */}
+        <Box sx={{ mb: 2 }}>
+          <Typography
+            variant="body2"
+            gutterBottom
+            sx={{ mb: 2, fontWeight: 500 }}
+          >
+            Glow Color (RGB)
+          </Typography>
+
+          {/* Red */}
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" sx={{ mb: 0.5, display: "block" }}>
+              Red: {glowColor.r}
+            </Typography>
+            <Slider
+              value={glowColor.r}
+              onChange={(e, newValue) =>
+                setGlowColor({ ...glowColor, r: newValue })
+              }
+              min={0}
+              max={255}
+              step={1}
+              sx={{
+                "& .MuiSlider-thumb": {
+                  bgcolor: "#ff0000",
+                },
+                "& .MuiSlider-track": {
+                  bgcolor: "#ff0000",
+                },
+              }}
+            />
+          </Box>
+
+          {/* Green */}
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" sx={{ mb: 0.5, display: "block" }}>
+              Green: {glowColor.g}
+            </Typography>
+            <Slider
+              value={glowColor.g}
+              onChange={(e, newValue) =>
+                setGlowColor({ ...glowColor, g: newValue })
+              }
+              min={0}
+              max={255}
+              step={1}
+              sx={{
+                "& .MuiSlider-thumb": {
+                  bgcolor: "#00ff00",
+                },
+                "& .MuiSlider-track": {
+                  bgcolor: "#00ff00",
+                },
+              }}
+            />
+          </Box>
+
+          {/* Blue */}
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" sx={{ mb: 0.5, display: "block" }}>
+              Blue: {glowColor.b}
+            </Typography>
+            <Slider
+              value={glowColor.b}
+              onChange={(e, newValue) =>
+                setGlowColor({ ...glowColor, b: newValue })
+              }
+              min={0}
+              max={255}
+              step={1}
+              sx={{
+                "& .MuiSlider-thumb": {
+                  bgcolor: "#0000ff",
+                },
+                "& .MuiSlider-track": {
+                  bgcolor: "#0000ff",
+                },
+              }}
+            />
+          </Box>
+
+          {/* Color Preview */}
+          <Box
+            sx={{
+              width: "100%",
+              height: 40,
+              bgcolor: `rgb(${glowColor.r}, ${glowColor.g}, ${glowColor.b})`,
+              borderRadius: 1,
+              border: "1px solid #ccc",
+              mt: 2,
+            }}
+          />
         </Box>
       </Box>
     </div>

@@ -18,6 +18,9 @@ export default function SimpleCube({
   thickness = 100, // chip depth/thickness
   color = { r: 166, g: 96, b: 37 }, // chip color
   targetNumbers = null, // Target numbers [col0, col1, col2] to pause at, null = continuous scrolling
+  glowEnabled = false, // Enable glow effect
+  glowIntensity = 0.0, // Glow intensity 0.0 to 1.0
+  glowColor = { r: 255, g: 215, b: 0 }, // Glow color (RGB)
 }) {
   const canvasRef = useRef(null);
   const glRef = useRef(null);
@@ -131,7 +134,7 @@ export default function SimpleCube({
         canvas.width = baseChipSize;
         canvas.height = baseChipSize * 10;
         const ctx = canvas.getContext("2d", {
-          alpha: false,
+          alpha: true, // Enable alpha for transparent background
           willReadFrequently: false,
         });
         if (!ctx) return null;
@@ -141,102 +144,21 @@ export default function SimpleCube({
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
 
-        // Fill with base chip color background
-        ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Clear canvas with transparent background - NO gradient, NO separators
+        // Only numbers will be drawn
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        const separatorColor = "#8b6f47";
-        const separatorThickness = 4;
         const columnWidth = canvas.width / 3; // Equal column widths in texture
         const numberHeight = baseChipSize;
-        const topBottomColor = "#ab7437";
-        const centerColor = "#fcf2cc";
-        const numberColor = "#2c0000";
+        const numberColor = "#2c0000"; // Black numbers
 
-        // Draw gradient background for each cell
-        // Use equal column widths in texture - the shader will handle border exclusion
-        // The texture should have equal columns (0-1/3, 1/3-2/3, 2/3-1) for proper mapping
-        for (let col = 0; col < 3; col++) {
-          const colStartX = col * (canvas.width / 3);
-
-          for (let num = 0; num < 10; num++) {
-            const cellTopY = num * numberHeight;
-            const cellBottomY = (num + 1) * numberHeight;
-
-            const gradient = ctx.createLinearGradient(
-              colStartX,
-              cellTopY,
-              colStartX,
-              cellBottomY
-            );
-
-            const blendColor = (ratio) => {
-              const distanceFromCenter = Math.abs(ratio - 0.5) * 2;
-              const exponentialFactor = Math.exp(
-                -8 * distanceFromCenter * distanceFromCenter
-              );
-
-              const r1 = parseInt(topBottomColor.slice(1, 3), 16);
-              const g1 = parseInt(topBottomColor.slice(3, 5), 16);
-              const b1 = parseInt(topBottomColor.slice(5, 7), 16);
-
-              const r2 = parseInt(centerColor.slice(1, 3), 16);
-              const g2 = parseInt(centerColor.slice(3, 5), 16);
-              const b2 = parseInt(centerColor.slice(5, 7), 16);
-
-              const r = Math.round(r1 + (r2 - r1) * exponentialFactor);
-              const g = Math.round(g1 + (g2 - g1) * exponentialFactor);
-              const b = Math.round(b1 + (b2 - b1) * exponentialFactor);
-
-              return `rgb(${r}, ${g}, ${b})`;
-            };
-
-            const numStops = 30;
-            for (let i = 0; i <= numStops; i++) {
-              const position = i / numStops;
-              const color = blendColor(position);
-              gradient.addColorStop(position, color);
-            }
-
-            ctx.fillStyle = gradient;
-            ctx.fillRect(colStartX, cellTopY, canvas.width / 3, numberHeight);
-          }
-        }
-
-        // Draw horizontal separators
-        ctx.fillStyle = separatorColor;
-        for (let num = 0; num <= 10; num++) {
-          const y = Math.round(num * numberHeight);
-          ctx.fillRect(
-            0,
-            y - Math.floor(separatorThickness / 2),
-            canvas.width,
-            separatorThickness
-          );
-        }
-
-        // Draw vertical separators between columns
-        const col1X = Math.round(canvas.width / 3);
-        const col2X = Math.round((canvas.width / 3) * 2);
-        ctx.fillRect(
-          col1X - Math.floor(separatorThickness / 2),
-          0,
-          separatorThickness,
-          canvas.height
-        );
-        ctx.fillRect(
-          col2X - Math.floor(separatorThickness / 2),
-          0,
-          separatorThickness,
-          canvas.height
-        );
-
-        // Draw numbers 0-9 in each column - match home page style
+        // Draw ONLY numbers 0-9 in each column - match home page style
+        // No background, no separators - just numbers on transparent background
         ctx.fillStyle = numberColor;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
-        const maxNumberWidth = (canvas.width / 3) / 2;
+        const maxNumberWidth = canvas.width / 3 / 2;
         const maxNumberHeight = numberHeight * 0.85; // Match home page
 
         // Start with larger font size (match home page: 0.75, max 240)
@@ -271,7 +193,7 @@ export default function SimpleCube({
         ctx.lineCap = "round";
 
         for (let col = 0; col < 3; col++) {
-          const colX = (canvas.width / 3) * col + (canvas.width / 3) / 2;
+          const colX = (canvas.width / 3) * col + canvas.width / 3 / 2;
 
           for (let num = 0; num < 10; num++) {
             const numY = num * numberHeight + numberHeight / 2;
@@ -466,11 +388,20 @@ export default function SimpleCube({
         gl.uniform1f(enableSlotAnimationLocation, 1.0); // Enable slot animation
         gl.uniform1f(timeLocation, time);
         gl.uniform1f(scrollSpeedLocation, 10.0); // Scroll speed (match home page)
-        
+
         // Handle target numbers - if provided, pause at those numbers
-        if (targetNumbers && Array.isArray(targetNumbers) && targetNumbers.length === 3) {
+        if (
+          targetNumbers &&
+          Array.isArray(targetNumbers) &&
+          targetNumbers.length === 3
+        ) {
           gl.uniform1f(stopProgressLocation, 1.0); // Fully stopped
-          gl.uniform3f(targetNumbersLocation, targetNumbers[0], targetNumbers[1], targetNumbers[2]);
+          gl.uniform3f(
+            targetNumbersLocation,
+            targetNumbers[0],
+            targetNumbers[1],
+            targetNumbers[2]
+          );
         } else {
           gl.uniform1f(stopProgressLocation, 0.0); // Always scrolling
           gl.uniform3f(targetNumbersLocation, 0.0, 0.0, 0.0); // Not stopping
@@ -483,9 +414,14 @@ export default function SimpleCube({
 
         gl.uniform1f(borderWidthLocation, borderWidth);
         gl.uniform1f(borderRadiusLocation, borderRadius);
-        gl.uniform1f(glowEnabledLocation, 0.0); // Disable glow for now
-        gl.uniform1f(glowIntensityLocation, 1.0);
-        gl.uniform3f(glowColorLocation, 1.0, 0.84, 0.0); // Gold glow color
+        gl.uniform1f(glowEnabledLocation, glowEnabled ? 1.0 : 0.0);
+        gl.uniform1f(glowIntensityLocation, glowIntensity);
+        gl.uniform3f(
+          glowColorLocation,
+          glowColor.r / 255.0,
+          glowColor.g / 255.0,
+          glowColor.b / 255.0
+        );
 
         // Bind texture (must be bound before drawing)
         if (textureRef.current && textureLocation !== null) {
@@ -541,6 +477,9 @@ export default function SimpleCube({
     thickness,
     color,
     targetNumbers,
+    glowEnabled,
+    glowIntensity,
+    glowColor,
   ]);
 
   return (

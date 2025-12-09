@@ -33,6 +33,7 @@ export default function FacesPage() {
         rotationZ={rotationZ}
         thickness={100}
         color={{ r: 166, g: 96, b: 37 }}
+        targetNumbers={[9, 0, 1]}
       />
 
       {/* Controls Panel */}

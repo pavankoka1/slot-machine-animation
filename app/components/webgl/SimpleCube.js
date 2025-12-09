@@ -17,6 +17,7 @@ export default function SimpleCube({
   height = 500, // chip height (defaults to BetSpot height)
   thickness = 100, // chip depth/thickness
   color = { r: 166, g: 96, b: 37 }, // chip color
+  targetNumbers = null, // Target numbers [col0, col1, col2] to pause at, null = continuous scrolling
 }) {
   const canvasRef = useRef(null);
   const glRef = useRef(null);
@@ -146,15 +147,17 @@ export default function SimpleCube({
 
         const separatorColor = "#8b6f47";
         const separatorThickness = 4;
-        const columnWidth = canvas.width / 3;
+        const columnWidth = canvas.width / 3; // Equal column widths in texture
         const numberHeight = baseChipSize;
         const topBottomColor = "#ab7437";
         const centerColor = "#fcf2cc";
         const numberColor = "#2c0000";
 
         // Draw gradient background for each cell
+        // Use equal column widths in texture - the shader will handle border exclusion
+        // The texture should have equal columns (0-1/3, 1/3-2/3, 2/3-1) for proper mapping
         for (let col = 0; col < 3; col++) {
-          const colStartX = col * columnWidth;
+          const colStartX = col * (canvas.width / 3);
 
           for (let num = 0; num < 10; num++) {
             const cellTopY = num * numberHeight;
@@ -196,7 +199,7 @@ export default function SimpleCube({
             }
 
             ctx.fillStyle = gradient;
-            ctx.fillRect(colStartX, cellTopY, columnWidth, numberHeight);
+            ctx.fillRect(colStartX, cellTopY, canvas.width / 3, numberHeight);
           }
         }
 
@@ -212,9 +215,9 @@ export default function SimpleCube({
           );
         }
 
-        // Draw vertical separators
-        const col1X = Math.round(columnWidth);
-        const col2X = Math.round(columnWidth * 2);
+        // Draw vertical separators between columns
+        const col1X = Math.round(canvas.width / 3);
+        const col2X = Math.round((canvas.width / 3) * 2);
         ctx.fillRect(
           col1X - Math.floor(separatorThickness / 2),
           0,
@@ -228,43 +231,66 @@ export default function SimpleCube({
           canvas.height
         );
 
-        // Draw numbers 0-9 in each column
+        // Draw numbers 0-9 in each column - match home page style
         ctx.fillStyle = numberColor;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
-        const maxNumberWidth = columnWidth / 2;
-        const maxNumberHeight = numberHeight * 0.85;
+        const maxNumberWidth = (canvas.width / 3) / 2;
+        const maxNumberHeight = numberHeight * 0.85; // Match home page
+
+        // Start with larger font size (match home page: 0.75, max 240)
         let fontSize = Math.min(numberHeight * 0.75, 240);
         ctx.font = `900 ${fontSize}px Arial, sans-serif`;
 
         const testNumbers = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        let maxTextWidth = 0;
+        for (const num of testNumbers) {
+          const metrics = ctx.measureText(num);
+          maxTextWidth = Math.max(maxTextWidth, metrics.width);
+        }
+
+        if (maxTextWidth > maxNumberWidth) {
+          fontSize = (fontSize * maxNumberWidth) / maxTextWidth;
+          ctx.font = `900 ${fontSize}px Arial, sans-serif`;
+        }
+
+        if (fontSize > maxNumberHeight) {
+          fontSize = maxNumberHeight;
+          ctx.font = `900 ${fontSize}px Arial, sans-serif`;
+        }
+
+        // Ensure minimum readable size (match home page: 120)
+        fontSize = Math.max(fontSize, 120);
+        ctx.font = `900 ${fontSize}px Arial, sans-serif`;
+
+        // Draw numbers with stroke for bolder appearance (match home page)
+        ctx.strokeStyle = numberColor;
+        ctx.lineWidth = Math.max(3, fontSize * 0.06); // Match home page
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
 
         for (let col = 0; col < 3; col++) {
-          const colCenterX = (col + 0.5) * columnWidth;
+          const colX = (canvas.width / 3) * col + (canvas.width / 3) / 2;
 
           for (let num = 0; num < 10; num++) {
-            const cellTopY = num * numberHeight;
-            const cellCenterY = cellTopY + numberHeight / 2;
-            const numberText = testNumbers[num];
+            const numY = num * numberHeight + numberHeight / 2;
 
-            // Measure text and adjust font size if needed
-            let metrics = ctx.measureText(numberText);
-            let currentFontSize = fontSize;
+            // Save context state
+            ctx.save();
 
-            while (
-              (metrics.width > maxNumberWidth ||
-                metrics.actualBoundingBoxAscent +
-                  metrics.actualBoundingBoxDescent >
-                  maxNumberHeight) &&
-              currentFontSize > 10
-            ) {
-              currentFontSize -= 2;
-              ctx.font = `900 ${currentFontSize}px Arial, sans-serif`;
-              metrics = ctx.measureText(numberText);
-            }
+            // Translate to center of text
+            ctx.translate(colX, numY);
+            // Scale to make text elongated: 1.0 width, 1.2 height (match home page)
+            ctx.scale(1.0, 1.2);
 
-            ctx.fillText(numberText, colCenterX, cellCenterY);
+            // Draw stroke first (outline) for bolder appearance
+            ctx.strokeText(num.toString(), 0, 0);
+            // Then draw fill
+            ctx.fillText(num.toString(), 0, 0);
+
+            // Restore context state
+            ctx.restore();
           }
         }
 
@@ -440,8 +466,15 @@ export default function SimpleCube({
         gl.uniform1f(enableSlotAnimationLocation, 1.0); // Enable slot animation
         gl.uniform1f(timeLocation, time);
         gl.uniform1f(scrollSpeedLocation, 10.0); // Scroll speed (match home page)
-        gl.uniform1f(stopProgressLocation, 0.0); // Always scrolling
-        gl.uniform3f(targetNumbersLocation, 0.0, 0.0, 0.0); // Not stopping
+        
+        // Handle target numbers - if provided, pause at those numbers
+        if (targetNumbers && Array.isArray(targetNumbers) && targetNumbers.length === 3) {
+          gl.uniform1f(stopProgressLocation, 1.0); // Fully stopped
+          gl.uniform3f(targetNumbersLocation, targetNumbers[0], targetNumbers[1], targetNumbers[2]);
+        } else {
+          gl.uniform1f(stopProgressLocation, 0.0); // Always scrolling
+          gl.uniform3f(targetNumbersLocation, 0.0, 0.0, 0.0); // Not stopping
+        }
 
         // Calculate border width as 5% of original BetSpot width (before perspective scaling)
         // This ensures the border is proportional to the actual BetSpot size
@@ -507,6 +540,7 @@ export default function SimpleCube({
     height,
     thickness,
     color,
+    targetNumbers,
   ]);
 
   return (

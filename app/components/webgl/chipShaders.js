@@ -376,12 +376,19 @@ export const chipFragmentShaderSource = `#version 300 es
     }
     
     // Adjust texture coordinates to exclude border area
-    // Calculate border width in UV space (0-1)
-    float borderWidthUV = borderWidthLocal / (halfWidth * 2.0);
-    float borderHeightUV = borderWidthLocal / (halfHeight * 2.0);
+    // IMPORTANT: Use original chip dimensions (not rotated/scaled) for consistent texture mapping
+    // This ensures texture stays fixed to the face regardless of rotation
+    float originalHalfWidth = u_chipWidth / 2.0;
+    float originalHalfHeight = u_chipHeight / 2.0;
+    
+    // Calculate border width in UV space (0-1) based on original dimensions
+    // This ensures texture mapping is consistent regardless of rotation
+    float borderWidthUV = u_borderWidth / (originalHalfWidth * 2.0);
+    float borderHeightUV = u_borderWidth / (originalHalfHeight * 2.0);
     
     // Remap UV coordinates to exclude border
     // v_texCoord goes from 0 to 1, we need to map it to [borderWidthUV, 1-borderWidthUV]
+    // Use original v_texCoord directly - it's already correct for the face
     vec2 adjustedTexCoord = vec2(
       v_texCoord.x * (1.0 - 2.0 * borderWidthUV) + borderWidthUV,
       v_texCoord.y * (1.0 - 2.0 * borderHeightUV) + borderHeightUV

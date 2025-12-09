@@ -5,8 +5,8 @@ import {
   chipFragmentShaderSource,
   chipVertexShaderSource,
 } from "./chipShaders";
+import { cubeNormals, cubePositions, cubeTexCoords } from "./cubeGeometry";
 import { createProgram, createShader, getDevicePixelRatio } from "./webglUtils";
-import { cubePositions, cubeNormals, cubeTexCoords } from "./cubeGeometry";
 
 export default function SlotMachineAnimation({
   anchorEl,
@@ -575,7 +575,7 @@ export default function SlotMachineAnimation({
 
         // Scale the dimensions to match (with slight adjustment for height)
         const CHIP_WIDTH = requiredWidth3D;
-        const CHIP_HEIGHT = requiredHeight3D * 0.98; // Slight reduction to match BetSpot height exactly
+        const CHIP_HEIGHT = requiredHeight3D; // Slight reduction to match BetSpot height exactly
         const CHIP_DEPTH = currentConfig.chipThickness || 10;
 
         // Animation state variables
@@ -833,7 +833,12 @@ export default function SlotMachineAnimation({
           Math.abs(lastStopProgressRef.current - roundedProgress) > 0.1
         ) {
           if (stopProgress > 0.1) {
-            console.log("Stop Progress:", roundedProgress, "Targets:", TARGET_NUMBERS);
+            console.log(
+              "Stop Progress:",
+              roundedProgress,
+              "Targets:",
+              TARGET_NUMBERS
+            );
           }
           lastStopProgressRef.current = roundedProgress;
         }
@@ -841,7 +846,7 @@ export default function SlotMachineAnimation({
         // Calculate border width as 5% of original BetSpot width (same as SimpleCube)
         const borderWidth = originalBetSpotWidth * 0.05;
         const borderRadius = borderWidth; // Use same value for rounded corners
-        
+
         gl.uniform1f(borderWidthLocation, borderWidth);
         gl.uniform1f(borderRadiusLocation, borderRadius);
         gl.uniform1f(

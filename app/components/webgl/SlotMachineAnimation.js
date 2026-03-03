@@ -5,6 +5,7 @@ import {
   chipFragmentShaderSource,
   chipVertexShaderSource,
 } from "./chipShaders";
+import { cubeNormals, cubePositions, cubeTexCoords } from "./cubeGeometry";
 import { createProgram, createShader, getDevicePixelRatio } from "./webglUtils";
 
 export default function SlotMachineAnimation({
@@ -91,14 +92,20 @@ export default function SlotMachineAnimation({
     configRef.current = config;
   }, [config]);
 
-  // Update anchor position when anchorEl changes
+  // Update anchor position when anchorEl changes (same format as SimpleCube)
   useEffect(() => {
     if (anchorEl?.getBoundingClientRect) {
-      anchorRectRef.current = anchorEl.getBoundingClientRect();
+      const rect = anchorEl.getBoundingClientRect();
       const dpr = getDevicePixelRatio();
+      anchorRectRef.current = {
+        width: rect.width * dpr,
+        height: rect.height * dpr,
+        left: rect.left * dpr,
+        top: rect.top * dpr,
+      };
       anchorCenterRef.current = [
-        (anchorRectRef.current.left + anchorRectRef.current.width / 2) * dpr,
-        (anchorRectRef.current.top + anchorRectRef.current.height / 2) * dpr,
+        anchorRectRef.current.left + anchorRectRef.current.width / 2,
+        anchorRectRef.current.top + anchorRectRef.current.height / 2,
       ];
     } else {
       anchorRectRef.current = null;
@@ -185,64 +192,15 @@ export default function SlotMachineAnimation({
         program,
         "u_borderRadius"
       );
+      const enableSlotAnimationLocation = gl.getUniformLocation(
+        program,
+        "u_enableSlotAnimation"
+      );
 
-      // Create chip geometry at unit size (centered at origin, -0.5 to 0.5)
-      const positions = new Float32Array([
-        // Front face (normal: 0, 0, 1)
-        -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, 0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5,
-        0.5, 0.5, -0.5, 0.5, 0.5,
-
-        // Back face (normal: 0, 0, -1)
-        -0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, -0.5, -0.5, -0.5, -0.5, -0.5,
-        -0.5, 0.5, -0.5, 0.5, 0.5, -0.5,
-
-        // Top face (normal: 0, 1, 0)
-        -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, 0.5, 0.5, 0.5, -0.5, 0.5, -0.5, 0.5,
-        0.5, 0.5, 0.5, 0.5, -0.5,
-
-        // Bottom face (normal: 0, -1, 0)
-        -0.5, -0.5, -0.5, 0.5, -0.5, 0.5, -0.5, -0.5, 0.5, -0.5, -0.5, -0.5,
-        0.5, -0.5, -0.5, 0.5, -0.5, 0.5,
-
-        // Right face (normal: 1, 0, 0)
-        0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, 0.5, 0.5, 0.5, -0.5, -0.5, 0.5,
-        0.5, 0.5, 0.5, -0.5, 0.5,
-
-        // Left face (normal: -1, 0, 0)
-        -0.5, -0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, -0.5, -0.5, -0.5, -0.5,
-        -0.5, -0.5, 0.5, -0.5, 0.5, 0.5,
-      ]);
-
-      const normals = new Float32Array([
-        // Front face
-        0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
-        // Back face
-        0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
-        // Top face
-        0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
-        // Bottom face
-        0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,
-        // Right face
-        1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
-        // Left face
-        -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,
-      ]);
-
-      // UV coordinates (0,0 bottom-left, 1,1 top-right)
-      const texCoords = new Float32Array([
-        // Front face
-        0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1,
-        // Back face
-        0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1,
-        // Top face
-        0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0,
-        // Bottom face
-        0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1,
-        // Right face
-        0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0,
-        // Left face
-        0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1,
-      ]);
+      // Use perfect cube geometry from cubeGeometry.js
+      const positions = cubePositions;
+      const normals = cubeNormals;
+      const texCoords = cubeTexCoords;
 
       const positionBuffer = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -494,16 +452,21 @@ export default function SlotMachineAnimation({
 
         gl.viewport(0, 0, canvas.width, canvas.height);
 
-        // Update anchor position
+        // Update anchor position (same as SimpleCube - account for device pixel ratio)
         if (anchorEl?.getBoundingClientRect) {
-          anchorRectRef.current = anchorEl.getBoundingClientRect();
+          const rect = anchorEl.getBoundingClientRect();
+          anchorRectRef.current = {
+            width: rect.width * dpr,
+            height: rect.height * dpr,
+            left: rect.left * dpr,
+            top: rect.top * dpr,
+          };
           anchorCenterRef.current = [
-            (anchorRectRef.current.left + anchorRectRef.current.width / 2) *
-              dpr,
-            (anchorRectRef.current.top + anchorRectRef.current.height / 2) *
-              dpr,
+            anchorRectRef.current.left + anchorRectRef.current.width / 2,
+            anchorRectRef.current.top + anchorRectRef.current.height / 2,
           ];
         } else {
+          anchorRectRef.current = null;
           anchorCenterRef.current = [(width * dpr) / 2, (height * dpr) / 2];
         }
       };
@@ -577,10 +540,42 @@ export default function SlotMachineAnimation({
           betSpotHeight = anchorRectRef.current.height;
         }
 
-        // Calculate chip dimensions relative to BetSpot
-        // Scale 1.0 = BetSpot width/height
-        const CHIP_WIDTH = betSpotWidth;
-        const CHIP_HEIGHT = betSpotHeight;
+        // Store original BetSpot width for border calculation (before perspective scaling)
+        const originalBetSpotWidth = betSpotWidth;
+        const originalBetSpotHeight = betSpotHeight;
+
+        // Calculate scale factor to compensate for perspective projection (same as SimpleCube)
+        // The perspective projection scales objects down, so we need to scale up to match BetSpot size
+        // Camera is at distance 1500, FOV is 45 degrees
+        const cameraZ = 1500.0;
+        const fov = 45.0;
+        const fovRad = (fov * Math.PI) / 180.0;
+        const fovFactor = 1.0 / Math.tan(fovRad * 0.5); // ≈ 2.414
+        const aspect = canvas.width / canvas.height;
+
+        // In the vertex shader:
+        // clipSpace.x = projected.x * f / aspect  (width is divided by aspect)
+        // clipSpace.y = -projected.y * f          (height is NOT divided by aspect)
+        // So we need to account for aspect ratio in width calculation
+
+        // Convert BetSpot size to clip space
+        const betSpotWidthInClipSpace = (betSpotWidth / canvas.width) * 2.0;
+        const betSpotHeightInClipSpace = (betSpotHeight / canvas.height) * 2.0;
+
+        // Calculate required 3D size
+        // For width: clipSpace.x = (3D_width / cameraZ) * fovFactor / aspect
+        // So: 3D_width = betSpotWidthInClipSpace * cameraZ * aspect / fovFactor
+        const requiredWidth3D =
+          (betSpotWidthInClipSpace * cameraZ * aspect) / fovFactor;
+
+        // For height: clipSpace.y = -(3D_height / cameraZ) * fovFactor
+        // So: 3D_height = betSpotHeightInClipSpace * cameraZ / fovFactor
+        const requiredHeight3D =
+          (betSpotHeightInClipSpace * cameraZ) / fovFactor;
+
+        // Scale the dimensions to match (with slight adjustment for height)
+        const CHIP_WIDTH = requiredWidth3D;
+        const CHIP_HEIGHT = requiredHeight3D; // Slight reduction to match BetSpot height exactly
         const CHIP_DEPTH = currentConfig.chipThickness || 10;
 
         // Animation state variables
@@ -614,7 +609,7 @@ export default function SlotMachineAnimation({
               currentConfig.step1.startOpacity) *
               progress;
         }
-        // Step 2
+        // Step 2 - uses step1's end values as start values
         else if (
           elapsed <
           currentConfig.step1.durationMs + currentConfig.step2.durationMs
@@ -624,26 +619,22 @@ export default function SlotMachineAnimation({
             0,
             Math.min(1.0, step2Elapsed / currentConfig.step2.durationMs)
           );
-          const startRotX =
-            (currentConfig.step2.startRotationX * Math.PI) / 180;
+          // Use step1's end values as step2's start values
+          const startRotX = (currentConfig.step1.endRotationX * Math.PI) / 180;
           const endRotX = (currentConfig.step2.endRotationX * Math.PI) / 180;
-          const startRotY =
-            (currentConfig.step2.startRotationY * Math.PI) / 180;
+          const startRotY = (currentConfig.step1.endRotationY * Math.PI) / 180;
           const endRotY = (currentConfig.step2.endRotationY * Math.PI) / 180;
+          const startScale = currentConfig.step1.endScale;
+          const endScale = currentConfig.step2.endScale;
+          const startOpacity = currentConfig.step1.endOpacity;
+          const endOpacity = currentConfig.step2.endOpacity;
 
           rotationX = startRotX + (endRotX - startRotX) * progress;
           rotationY = startRotY + (endRotY - startRotY) * progress;
-          scale =
-            currentConfig.step2.startScale +
-            (currentConfig.step2.endScale - currentConfig.step2.startScale) *
-              progress;
-          opacity =
-            currentConfig.step2.startOpacity +
-            (currentConfig.step2.endOpacity -
-              currentConfig.step2.startOpacity) *
-              progress;
+          scale = startScale + (endScale - startScale) * progress;
+          opacity = startOpacity + (endOpacity - startOpacity) * progress;
         }
-        // Step 3
+        // Step 3 - uses step2's end values as start values
         else if (elapsed < totalDuration) {
           const step3Elapsed =
             elapsed -
@@ -652,24 +643,20 @@ export default function SlotMachineAnimation({
             0,
             Math.min(1.0, step3Elapsed / currentConfig.step3.durationMs)
           );
-          const startRotX =
-            (currentConfig.step3.startRotationX * Math.PI) / 180;
+          // Use step2's end values as step3's start values
+          const startRotX = (currentConfig.step2.endRotationX * Math.PI) / 180;
           const endRotX = (currentConfig.step3.endRotationX * Math.PI) / 180;
-          const startRotY =
-            (currentConfig.step3.startRotationY * Math.PI) / 180;
+          const startRotY = (currentConfig.step2.endRotationY * Math.PI) / 180;
           const endRotY = (currentConfig.step3.endRotationY * Math.PI) / 180;
+          const startScale = currentConfig.step2.endScale;
+          const endScale = currentConfig.step3.endScale;
+          const startOpacity = currentConfig.step2.endOpacity;
+          const endOpacity = currentConfig.step3.endOpacity;
 
           rotationX = startRotX + (endRotX - startRotX) * progress;
           rotationY = startRotY + (endRotY - startRotY) * progress;
-          scale =
-            currentConfig.step3.startScale +
-            (currentConfig.step3.endScale - currentConfig.step3.startScale) *
-              progress;
-          opacity =
-            currentConfig.step3.startOpacity +
-            (currentConfig.step3.endOpacity -
-              currentConfig.step3.startOpacity) *
-              progress;
+          scale = startScale + (endScale - startScale) * progress;
+          opacity = startOpacity + (endOpacity - startOpacity) * progress;
         }
         // After animation completes, maintain final state
         else {
@@ -771,10 +758,15 @@ export default function SlotMachineAnimation({
           targetNumbers = [7, 7, 7];
         }
         // Ensure we have a valid array with 3 elements, rounded to integers
+        // Use nullish coalescing to handle 0 as a valid value (not falsy)
+        const parseTargetNumber = (val) => {
+          const num = Number(val);
+          return isNaN(num) ? 7 : Math.max(0, Math.min(9, Math.round(num)));
+        };
         const TARGET_NUMBERS = [
-          Math.max(0, Math.min(9, Math.round(Number(targetNumbers[0]) || 7))),
-          Math.max(0, Math.min(9, Math.round(Number(targetNumbers[1]) || 7))),
-          Math.max(0, Math.min(9, Math.round(Number(targetNumbers[2]) || 7))),
+          parseTargetNumber(targetNumbers[0]),
+          parseTargetNumber(targetNumbers[1]),
+          parseTargetNumber(targetNumbers[2]),
         ];
 
         // Debug: Log target numbers only when they change
@@ -841,13 +833,26 @@ export default function SlotMachineAnimation({
           Math.abs(lastStopProgressRef.current - roundedProgress) > 0.1
         ) {
           if (stopProgress > 0.1) {
-            console.log("Stop Progress:", roundedProgress, "Targets:", TARGET_NUMBERS);
+            console.log(
+              "Stop Progress:",
+              roundedProgress,
+              "Targets:",
+              TARGET_NUMBERS
+            );
           }
           lastStopProgressRef.current = roundedProgress;
         }
 
-        gl.uniform1f(borderWidthLocation, 2.0); // 2px border
-        gl.uniform1f(borderRadiusLocation, 2.0); // 2px border radius
+        // Calculate border width as 5% of original BetSpot width (same as SimpleCube)
+        const borderWidth = originalBetSpotWidth * 0.05;
+        const borderRadius = borderWidth; // Use same value for rounded corners
+
+        gl.uniform1f(borderWidthLocation, borderWidth);
+        gl.uniform1f(borderRadiusLocation, borderRadius);
+        gl.uniform1f(
+          enableSlotAnimationLocation,
+          currentConfig.enableSlotAnimation !== false ? 1.0 : 0.0
+        ); // Enable/disable slot animation
 
         // Set up texture
         if (textureRef.current) {

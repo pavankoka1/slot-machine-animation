@@ -16,6 +16,7 @@ export const chipVertexShaderSource = `#version 300 es
   
   // Output to fragment shader
   out vec3 v_normal;
+  out vec3 v_normalOriginal; // Original normal before rotation (for face detection)
   out vec3 v_position;
   out vec2 v_texCoord;
   out float v_opacity;
@@ -54,46 +55,60 @@ export const chipVertexShaderSource = `#version 300 es
   void main() {
     // Scale the position by dimensions and then by scale factor
     // Geometry is unit size (-0.5 to 0.5), so we scale by dimensions first
-    // Slightly expand geometry to ensure faces overlap and prevent gaps
-    float expansionFactor = 1.01; // 1% expansion to ensure face overlap
     vec3 pos3D = vec3(
-      a_position.x * u_chipWidth * expansionFactor,
-      a_position.y * u_chipHeight * expansionFactor,
-      a_position.z * u_chipDepth * expansionFactor
+      a_position.x * u_chipWidth,
+      a_position.y * u_chipHeight,
+      a_position.z * u_chipDepth
     ) * u_scale;
     
-    // Apply rotations
+    // Apply rotations (cube rotates around its center at origin)
     mat3 rotationMatrix = rotateX(u_rotationX) * rotateY(u_rotationY) * rotateZ(u_rotationZ);
     vec3 rotatedPos3D = rotationMatrix * pos3D;
     
-    // Apply perspective projection for proper 3D effect
-    // Camera distance - adjust this to control perspective strength
-    float cameraDistance = 1000.0;
-    float perspective = cameraDistance / (cameraDistance - rotatedPos3D.z);
+    // Standard WebGL perspective projection (like MDN tutorial)
+    // Camera at (0, 0, -cameraZ) looking at (0, 0, 0)
+    // In camera space: translate by +cameraZ so camera is at origin
+    float cameraZ = 1500.0;
+    vec3 cameraSpace = vec3(rotatedPos3D.x, rotatedPos3D.y, rotatedPos3D.z + cameraZ);
     
-    // Convert to 2D screen position with perspective
-    vec2 screenPos = u_center + rotatedPos3D.xy * perspective;
+    // Perspective projection: divide by z
+    // For camera looking down +Z: (x/z, y/z)
+    float perspective = 1.0 / cameraSpace.z;
+    vec2 projected = cameraSpace.xy * perspective;
     
-    // Pass normal (rotated)
+    // Field of view scaling (like mat4.perspective)
+    float fov = 45.0;
+    float fovRad = radians(fov);
+    float f = 1.0 / tan(fovRad * 0.5);
+    float aspect = u_resolution.x / u_resolution.y;
+    
+    // Scale by FOV and convert to clip space [-1, 1]
+    vec2 clipSpace = vec2(
+      projected.x * f / aspect,
+      -projected.y * f
+    );
+    
+    // Apply center offset in screen space (convert from pixel coordinates to clip space)
+    // u_center is in pixel coordinates, convert to clip space [-1, 1]
+    vec2 centerOffset = vec2(
+      (u_center.x / u_resolution.x) * 2.0 - 1.0,
+      1.0 - (u_center.y / u_resolution.y) * 2.0
+    );
+    clipSpace = clipSpace + centerOffset;
+    
+    // Depth: standard perspective depth calculation
+    float near = 100.0;
+    float far = 3000.0;
+    float depth = ((far + near) / (far - near)) - ((2.0 * far * near) / ((far - near) * cameraSpace.z));
+    
+    // Pass normal (rotated) and original normal (for face detection)
     v_normal = rotationMatrix * normalize(a_normal);
+    v_normalOriginal = normalize(a_normal); // Original normal before rotation
     v_position = rotatedPos3D;
     v_texCoord = a_texCoord;
     v_opacity = u_opacity;
     
-    // Convert to clip space (WebGL Y-axis is inverted)
-    vec2 zeroToOne = screenPos / u_resolution;
-    vec2 zeroToTwo = zeroToOne * 2.0;
-    vec2 clipSpace = vec2(zeroToTwo.x - 1.0, 1.0 - zeroToTwo.y);
-    
-    // Calculate depth with proper perspective
-    // Use a linear depth calculation that works well with perspective
-    // Map Z from expected range to [0, 1] for depth buffer
-    float nearPlane = -500.0;
-    float farPlane = 500.0;
-    float normalizedZ = (rotatedPos3D.z - nearPlane) / (farPlane - nearPlane);
-    normalizedZ = clamp(normalizedZ, 0.0, 1.0);
-    
-    gl_Position = vec4(clipSpace, normalizedZ, 1.0);
+    gl_Position = vec4(clipSpace, depth, 1.0);
   }
 `;
 
@@ -118,8 +133,10 @@ export const chipFragmentShaderSource = `#version 300 es
   uniform mediump vec3 u_targetNumbers; // Target numbers for each column (0-9)
   uniform mediump float u_borderWidth; // Border width in pixels
   uniform mediump float u_borderRadius; // Border radius in pixels
+  uniform mediump float u_enableSlotAnimation; // 1.0 = enable slot animation, 0.0 = disable
   
   in vec3 v_normal;
+  in vec3 v_normalOriginal; // Original normal before rotation (for face detection)
   in vec3 v_position;
   in vec2 v_texCoord;
   in float v_opacity;
@@ -180,8 +197,83 @@ export const chipFragmentShaderSource = `#version 300 es
   }
   
   void main() {
+    // Detect which face we're on using the original normal (before rotation)
+    // This identifies which face this fragment belongs to
+    // Original normals: Front(0,0,1), Back(0,0,-1), Top(0,1,0), Bottom(0,-1,0), Right(1,0,0), Left(-1,0,0)
+    vec3 normalOrig = normalize(v_normalOriginal);
+    
+    // Use dot product to find which canonical direction this normal is closest to
+    vec3 frontDir = vec3(0.0, 0.0, 1.0);
+    vec3 backDir = vec3(0.0, 0.0, -1.0);
+    vec3 topDir = vec3(0.0, 1.0, 0.0);
+    vec3 bottomDir = vec3(0.0, -1.0, 0.0);
+    vec3 rightDir = vec3(1.0, 0.0, 0.0);
+    vec3 leftDir = vec3(-1.0, 0.0, 0.0);
+    
+    float dotFront = dot(normalOrig, frontDir);
+    float dotBack = dot(normalOrig, backDir);
+    float dotTop = dot(normalOrig, topDir);
+    float dotBottom = dot(normalOrig, bottomDir);
+    float dotRight = dot(normalOrig, rightDir);
+    float dotLeft = dot(normalOrig, leftDir);
+    
+    // Find which dot product is the maximum (closest to 1.0)
+    float maxDot = max(max(max(dotFront, dotBack), max(dotTop, dotBottom)), max(dotRight, dotLeft));
+    
+    // Use a small epsilon for floating point comparison
+    float epsilon = 0.01;
+    
+    // Determine which face based on which dot product is maximum
+    bool isFrontFace = abs(maxDot - dotFront) < epsilon && dotFront > 0.5;
+    bool isBackFace = abs(maxDot - dotBack) < epsilon && dotBack > 0.5;
+    bool isTopFace = abs(maxDot - dotTop) < epsilon && dotTop > 0.5;
+    bool isBottomFace = abs(maxDot - dotBottom) < epsilon && dotBottom > 0.5;
+    bool isRightFace = abs(maxDot - dotRight) < epsilon && dotRight > 0.5;
+    bool isLeftFace = abs(maxDot - dotLeft) < epsilon && dotLeft > 0.5;
+    
+    // Simple: Paint each face with a different color
+    // Front/back faces
+    bool isFrontOrBackFace = isFrontFace || isBackFace;
+    
+    // Side faces (top, bottom, left, right)
+    bool isSideFace = isTopFace || isBottomFace || isLeftFace || isRightFace;
+    
+    // Assign colors to each face
+    vec3 faceColor;
+    if (isFrontFace) {
+      faceColor = vec3(1.0, 0.0, 0.0); // Red - Front
+    } else if (isBackFace) {
+      faceColor = vec3(0.0, 1.0, 0.0); // Green - Back
+    } else if (isTopFace) {
+      faceColor = vec3(0.0, 0.0, 1.0); // Blue - Top
+    } else if (isBottomFace) {
+      faceColor = vec3(1.0, 1.0, 0.0); // Yellow - Bottom
+    } else if (isRightFace) {
+      faceColor = vec3(1.0, 0.0, 1.0); // Magenta - Right
+    } else if (isLeftFace) {
+      faceColor = vec3(0.0, 1.0, 1.0); // Cyan - Left
+    } else {
+      faceColor = vec3(0.5, 0.5, 0.5); // Gray - Fallback (shouldn't happen)
+    }
+    
+    // If slot animation is disabled, render debug colors
+    if (u_enableSlotAnimation < 0.5) {
+      fragColor = vec4(faceColor, v_opacity);
+      return;
+    }
+    
+    // Slot animation enabled - continue with texture and border logic below
+    
+    // For side faces, render base chip color and return (no slot animation on sides)
+    if (isSideFace) {
+      fragColor = vec4(u_color, v_opacity);
+      return;
+    }
+    
+    // Only front and back faces continue to slot animation logic below
+    
+    // Calculate local position for border calculations (only when needed)
     // Get reverse rotation matrix to convert from world space to local space
-    // Apply rotations in reverse order with reverse angles
     mat3 reverseRotation = rotateZ(-u_rotationZ) * rotateY(-u_rotationY) * rotateX(-u_rotationX);
     vec3 localPos = reverseRotation * v_position;
     
@@ -190,29 +282,7 @@ export const chipFragmentShaderSource = `#version 300 es
     float halfHeight = (u_chipHeight / 2.0) * u_scale;
     float halfDepth = (u_chipDepth / 2.0) * u_scale;
     
-    // Check if inside chip bounds
-    // Use a larger tolerance to prevent gaps at edges during rotation
-    // This accounts for precision issues and perspective projection artifacts
-    float boundsTolerance = 2.0;
-    float distX = abs(localPos.x);
-    float distY = abs(localPos.y);
-    float distZ = abs(localPos.z);
-    
-    // Calculate how far outside each dimension we are
-    float outsideX = max(0.0, distX - halfWidth);
-    float outsideY = max(0.0, distY - halfHeight);
-    float outsideZ = max(0.0, distZ - halfDepth);
-    
-    // If we're outside the bounds by more than tolerance, discard
-    if (outsideX > boundsTolerance || outsideY > boundsTolerance || outsideZ > boundsTolerance) {
-      discard;
-    }
-    
-    // Detect front or back face (Z edges) - used for both border and glow
-    float epsilon = 1.0;
-    bool isFrontOrBackFace = abs(distZ - halfDepth) < epsilon;
-    
-    // Border detection and rendering with rounded corners
+    // Border detection and rendering with rounded corners - CHECK FIRST before any texture sampling
     // Border colors
     vec3 borderColorTopBottom = vec3(0.6235, 0.4118, 0.2431); // #9f6937
     vec3 borderColorCenter = vec3(0.9490, 0.8235, 0.6039); // #f2d29a
@@ -220,9 +290,9 @@ export const chipFragmentShaderSource = `#version 300 es
     // Calculate border width and radius in local space (scaled)
     float borderWidthLocal = u_borderWidth * u_scale;
     float borderRadiusLocal = u_borderRadius * u_scale;
-    bool inBorderRegion = false;
-    vec3 borderColor = borderColorTopBottom;
     
+    // Check border FIRST - before any texture operations
+    // This ensures the border/bezel is completely solid and nothing shows through
     if (isFrontOrBackFace) {
       // Calculate distance from each edge
       float distFromTop = halfHeight - localPos.y;
@@ -242,43 +312,82 @@ export const chipFragmentShaderSource = `#version 300 es
                       (distFromBottomLeftCorner < borderRadiusLocal && distFromBottom > 0.0 && distFromLeft > 0.0) ||
                       (distFromBottomRightCorner < borderRadiusLocal && distFromBottom > 0.0 && distFromRight > 0.0);
       
-      // Check if we're in top or bottom border (excluding corners)
-      bool inTopBorder = distFromTop < borderWidthLocal && distFromTop > 0.0 && 
-                         distFromLeft >= borderRadiusLocal && distFromRight >= borderRadiusLocal;
-      bool inBottomBorder = distFromBottom < borderWidthLocal && distFromBottom > 0.0 && 
-                            distFromLeft >= borderRadiusLocal && distFromRight >= borderRadiusLocal;
+      // Check if we're in top or bottom border area (full width)
+      // Top and bottom borders: solid color, nothing shows through
+      bool inTopBorderArea = distFromTop < borderWidthLocal && distFromTop > 0.0;
+      bool inBottomBorderArea = distFromBottom < borderWidthLocal && distFromBottom > 0.0;
       
-      // Check if we're in left or right border (but not in top/bottom border or corners)
+      // Check if we're in left or right border (but not in top/bottom border)
       bool inLeftBorder = distFromLeft < borderWidthLocal && distFromLeft > 0.0 && 
-                          !inTopBorder && !inBottomBorder && 
+                          !inTopBorderArea && !inBottomBorderArea && 
                           distFromTop >= borderRadiusLocal && distFromBottom >= borderRadiusLocal;
       bool inRightBorder = distFromRight < borderWidthLocal && distFromRight > 0.0 && 
-                           !inTopBorder && !inBottomBorder && 
+                           !inTopBorderArea && !inBottomBorderArea && 
                            distFromTop >= borderRadiusLocal && distFromBottom >= borderRadiusLocal;
+      
+      // Determine border color and return immediately - no texture sampling
+      vec3 borderColor = borderColorTopBottom;
       
       if (inCorner) {
         // Corner: use top/bottom color (solid)
-        inBorderRegion = true;
         borderColor = borderColorTopBottom;
-      } else if (inTopBorder || inBottomBorder) {
-        // Top/bottom border: solid color
-        inBorderRegion = true;
+      } else if (inTopBorderArea || inBottomBorderArea) {
+        // Top/bottom border: solid color (completely opaque, nothing shows through)
         borderColor = borderColorTopBottom;
       } else if (inLeftBorder || inRightBorder) {
         // Left/right border: gradient from top/bottom (#9f6937) to center (#f2d29a)
-        inBorderRegion = true;
-        
-        // Calculate Y position relative to center (-halfHeight to halfHeight)
+        // Calculate Y position normalized to 0-1 (0 = bottom, 1 = top)
         float yPos = localPos.y;
-        // Normalize to 0-1 where 0 = bottom, 0.5 = center, 1 = top
         float yNormalized = (yPos + halfHeight) / (halfHeight * 2.0);
-        // Calculate distance from center (0 at center, 1 at edges)
+        // Distance from center (0.5), normalized to 0-1 (0 = center, 1 = edge)
         float distFromCenter = abs(yNormalized - 0.5) * 2.0;
-        // Use exponential curve for gradient (similar to cell gradient)
-        // gradientFactor is high (close to 1) at center, low (close to 0) at edges
+        // Create smooth gradient: stronger at center, fades to edges
+        // Use exponential falloff for smooth transition
         float gradientFactor = exp(-8.0 * distFromCenter * distFromCenter);
-        // Blend: at center (gradientFactor=1) use centerColor, at edges (gradientFactor=0) use topBottomColor
+        // Mix from darker color (top/bottom) to lighter color (center)
         borderColor = mix(borderColorTopBottom, borderColorCenter, gradientFactor);
+      }
+      
+      // If we're in any border region, apply glow if enabled, then render border
+      if (inCorner || inTopBorderArea || inBottomBorderArea || inLeftBorder || inRightBorder) {
+        vec3 finalBorderColor = borderColor;
+        
+        // Apply glow to borders if enabled
+        if (u_glowEnabled > 0.5) {
+          // Calculate glow for border area using local position
+          float originalHalfWidth = u_chipWidth / 2.0;
+          float originalHalfHeight = u_chipHeight / 2.0;
+          
+          // Normalize local position to 0-1 range (center at 0.5, 0.5)
+          vec2 normalizedPos = vec2(
+            (localPos.x + originalHalfWidth) / (originalHalfWidth * 2.0),
+            (localPos.y + originalHalfHeight) / (originalHalfHeight * 2.0)
+          );
+          
+          vec2 center = vec2(0.5, 0.5);
+          vec2 distFromCenter = abs(normalizedPos - center);
+          
+          float xSpreadRate = 5.0;
+          float ySpreadRate = 2.0;
+          float coverageX = max(u_glowIntensity * xSpreadRate, 0.001);
+          float coverageY = max(u_glowIntensity * ySpreadRate, 0.001);
+          
+          float distInCoverageX = distFromCenter.x / coverageX;
+          float distInCoverageY = distFromCenter.y / coverageY;
+          float distInCoverage = max(distInCoverageX, distInCoverageY);
+          
+          float glowFactor = 1.0 - smoothstep(0.0, 1.0, clamp(distInCoverage, 0.0, 1.0));
+          float opacityExponent = 1.2;
+          float baseGlowOpacity = pow(clamp(u_glowIntensity, 0.0, 1.0), 1.0 / opacityExponent);
+          float glowOpacity = baseGlowOpacity * glowFactor * 4.0;
+          glowOpacity = clamp(glowOpacity, 0.0, 1.0);
+          
+          // Mix border color with glow
+          finalBorderColor = mix(borderColor, u_glowColor, glowOpacity);
+        }
+        
+        fragColor = vec4(finalBorderColor, v_opacity);
+        return;
       }
     }
     
@@ -286,7 +395,6 @@ export const chipFragmentShaderSource = `#version 300 es
     // Check if we're in a corner region and apply rounded corners
     if (isFrontOrBackFace) {
       // Calculate distance from the rounded rectangle edges
-      // For each corner, check if we're outside the rounded rectangle
       float cornerX = abs(localPos.x) - (halfWidth - borderRadiusLocal);
       float cornerY = abs(localPos.y) - (halfHeight - borderRadiusLocal);
       
@@ -302,19 +410,20 @@ export const chipFragmentShaderSource = `#version 300 es
       }
     }
     
-    // If in border region, render border and return early
-    if (inBorderRegion) {
-      fragColor = vec4(borderColor, v_opacity);
-      return;
-    }
-    
     // Adjust texture coordinates to exclude border area
-    // Calculate border width in UV space (0-1)
-    float borderWidthUV = borderWidthLocal / (halfWidth * 2.0);
-    float borderHeightUV = borderWidthLocal / (halfHeight * 2.0);
+    // IMPORTANT: Use original chip dimensions (not rotated/scaled) for consistent texture mapping
+    // This ensures texture stays fixed to the face regardless of rotation
+    float originalHalfWidth = u_chipWidth / 2.0;
+    float originalHalfHeight = u_chipHeight / 2.0;
+    
+    // Calculate border width in UV space (0-1) based on original dimensions
+    // This ensures texture mapping is consistent regardless of rotation
+    float borderWidthUV = u_borderWidth / (originalHalfWidth * 2.0);
+    float borderHeightUV = u_borderWidth / (originalHalfHeight * 2.0);
     
     // Remap UV coordinates to exclude border
     // v_texCoord goes from 0 to 1, we need to map it to [borderWidthUV, 1-borderWidthUV]
+    // Use original v_texCoord directly - it's already correct for the face
     vec2 adjustedTexCoord = vec2(
       v_texCoord.x * (1.0 - 2.0 * borderWidthUV) + borderWidthUV,
       v_texCoord.y * (1.0 - 2.0 * borderHeightUV) + borderHeightUV
@@ -365,138 +474,265 @@ export const chipFragmentShaderSource = `#version 300 es
     // Scroll continuously through numbers 0-9
     float continuousScrollPosition = mod(u_time * baseSpeed * speedMultiplier * u_scrollSpeed + timeOffset, 10.0);
     
-    // Calculate target position for this column (0-9)
-    // Target number is stored in u_targetNumbers based on column index
-    float targetNumber = 0.0;
-    if (columnIndex < 0.5) {
-      targetNumber = u_targetNumbers.x;
-    } else if (columnIndex < 1.5) {
-      targetNumber = u_targetNumbers.y;
+    // If stopProgress is 0.0, we're in continuous scrolling mode - no easing needed
+    float scrollPosition;
+    if (u_stopProgress < 0.001) {
+      // Continuous scrolling - use continuous position directly
+      scrollPosition = continuousScrollPosition;
     } else {
-      targetNumber = u_targetNumbers.z;
+      // Stopping animation - apply easing to target
+      // Calculate target position for this column (0-9)
+      float targetNumber = 0.0;
+      if (columnIndex < 0.5) {
+        targetNumber = u_targetNumbers.x;
+      } else if (columnIndex < 1.5) {
+        targetNumber = u_targetNumbers.y;
+      } else {
+        targetNumber = u_targetNumbers.z;
+      }
+      
+      float targetScrollPosition = targetNumber;
+      
+      // Ultra-smooth easing function: ease-out with very smooth deceleration
+      float t = clamp(u_stopProgress, 0.0, 1.0);
+      float smoothEase = 1.0 - pow(1.0 - t, 5.0);
+      float easedProgress = smoothstep(0.0, 1.0, smoothEase);
+      
+      // Apply additional smoothing in the final 30%
+      if (t > 0.7) {
+        float finalT = (t - 0.7) / 0.3;
+        float finalEase = 1.0 - pow(1.0 - finalT, 6.0);
+        float finalSmooth = smoothstep(0.0, 1.0, finalEase);
+        easedProgress = mix(easedProgress, finalSmooth, smoothstep(0.7, 1.0, t));
+      }
+      
+      // Calculate the shortest path to target (handle wrapping around 0-10)
+      float diff = targetScrollPosition - continuousScrollPosition;
+      if (diff > 5.0) {
+        diff = diff - 10.0;
+      } else if (diff < -5.0) {
+        diff = diff + 10.0;
+      }
+      
+      // Interpolate with easing
+      scrollPosition = continuousScrollPosition + diff * easedProgress;
+      scrollPosition = mod(scrollPosition + 10.0, 10.0);
     }
-    
-    // Convert target number to scroll position
-    // User reports: input [1,2,3] shows [8,7,6], meaning output = 9 - input
-    // After trying different combinations, the fix is:
-    // - targetScrollPosition = targetNumber (NOT inverted)
-    // - numberV = (9.0 - scrollPosition + adjustedTexCoord.y) / 10.0 (inverted)
-    float targetScrollPosition = targetNumber;
-    
-    // Ultra-smooth easing function: ease-out with very smooth deceleration
-    float t = clamp(u_stopProgress, 0.0, 1.0);
-    
-    // Use a very smooth ease-out curve that prevents any glitches
-    // Ease-out quintic for smooth deceleration
-    float smoothEase = 1.0 - pow(1.0 - t, 5.0);
-    
-    // Add extra smoothing throughout, especially near the end
-    // Use smoothstep for ultra-smooth interpolation
-    float easedProgress = smoothstep(0.0, 1.0, smoothEase);
-    
-    // Apply additional smoothing in the final 30% to prevent any sudden changes
-    if (t > 0.7) {
-      float finalT = (t - 0.7) / 0.3; // Normalize to 0-1 for final 30%
-      // Use even smoother easing for the final portion
-      float finalEase = 1.0 - pow(1.0 - finalT, 6.0);
-      float finalSmooth = smoothstep(0.0, 1.0, finalEase);
-      // Blend between normal easing and final easing
-      easedProgress = mix(easedProgress, finalSmooth, smoothstep(0.7, 1.0, t));
-    }
-    
-    // Calculate the shortest path to target (handle wrapping around 0-10)
-    float diff = targetScrollPosition - continuousScrollPosition;
-    
-    // Normalize difference to shortest path (-5 to 5 range)
-    if (diff > 5.0) {
-      diff = diff - 10.0;
-    } else if (diff < -5.0) {
-      diff = diff + 10.0;
-    }
-    
-    // Interpolate with ultra-smooth easing - use easedProgress directly
-    // This ensures very smooth transition without sudden jumps
-    float scrollPosition = continuousScrollPosition + diff * easedProgress;
-    
-    // Wrap to 0-10 range with smooth wrapping
-    scrollPosition = mod(scrollPosition + 10.0, 10.0);
     
     // Map chip adjusted UV.y (0-1) to the scrolled number in texture
     // Texture has numbers 0-9: 0 at top (V≈0.95), 9 at bottom (V≈0.05)
-    // Texture mapping: Number N center is at V = 1.0 - (N + 0.5) / 10.0
-    // 
-    // User reports: getting 9 for 0, rest everything is fine
-    // For 1-9: (6.0 - scrollPosition + adjustedTexCoord.y) / 10.0 works
-    // For 0: need to fix the offset
-    //
-    // When scrollPosition = 0, adjustedTexCoord.y = 0.5, we need V = 0.95 (number 0):
-    // 0.95 = (X - 0 + 0.5) / 10.0
-    // 9.5 = X + 0.5
-    // X = 9.0
-    //
-    // So for 0, we need offset 9.0
+    // Numbers should scroll DOWN (from 0 to 9, top to bottom on screen)
+    // Current formula makes numbers go UP, so we need to reverse by subtracting scrollPosition
+    float scrollEpsilon = 0.1;
     float numberV;
-    if (scrollPosition < 0.5) {
-      // For 0: use offset 9.0 to get V = 0.95 (number 0)
-      numberV = (9.0 - scrollPosition + adjustedTexCoord.y) / 10.0;
+    if (u_stopProgress < 0.001) {
+      // Continuous scrolling - numbers scroll DOWN (reverse direction)
+      // Subtract scrollPosition to reverse the direction
+      numberV = (adjustedTexCoord.y - scrollPosition) / 10.0;
+      // Wrap around if negative
+      if (numberV < 0.0) {
+        numberV = numberV + 1.0;
+      }
     } else {
-      // For 1-9: use offset 6.0 (works correctly)
-      numberV = (6.0 - scrollPosition + adjustedTexCoord.y) / 10.0;
+      // Stopping animation - handle special case for number 0
+      bool isNearZero = scrollPosition < scrollEpsilon || scrollPosition > (10.0 - scrollEpsilon);
+      float targetNumber = 0.0;
+      if (columnIndex < 0.5) {
+        targetNumber = u_targetNumbers.x;
+      } else if (columnIndex < 1.5) {
+        targetNumber = u_targetNumbers.y;
+      } else {
+        targetNumber = u_targetNumbers.z;
+      }
+      bool isTargetZero = targetNumber < 0.5;
+      
+      // Reverse direction for stopping animation too
+      float reversedScrollPos = 10.0 - scrollPosition;
+      if (isTargetZero && isNearZero) {
+        float adjustedPos = reversedScrollPos > 9.5 ? reversedScrollPos - 10.0 : reversedScrollPos;
+        numberV = (adjustedTexCoord.y - adjustedPos) / 10.0;
+      } else {
+        numberV = (adjustedTexCoord.y - reversedScrollPos) / 10.0;
+      }
+      // Wrap around
+      if (numberV < 0.0) {
+        numberV = numberV + 1.0;
+      }
     }
     
     // Sample texture with number coordinates
+    // Texture now ONLY contains numbers (transparent background)
     vec2 numberUV = vec2(columnU, numberV);
     vec4 textureColor = texture(u_texture, numberUV);
     
     // Base chip color
     vec3 baseColor = u_color;
     
-    // Mix texture (numbers) with base color
-    // Numbers are black, so we use texture alpha to blend
-    vec3 chipColor = mix(baseColor, textureColor.rgb, textureColor.a);
+    // Render SINGLE linear gradient background across entire slot animation area
+    // Gradient colors: top/bottom = #ab7437 (171, 116, 55), center = #fcf2cc (252, 242, 204)
+    vec3 topBottomColor = vec3(171.0 / 255.0, 116.0 / 255.0, 55.0 / 255.0);
+    vec3 centerColor = vec3(252.0 / 255.0, 242.0 / 255.0, 204.0 / 255.0);
     
-    // Only apply glow effect on front and back faces
-    // (isFrontOrBackFace is already defined above)
-    if (u_glowEnabled > 0.5 && isFrontOrBackFace) {
-      // Create multiple random glow squares
-      // Use UV coordinates for positioning
-      vec2 uv = v_texCoord;
-      
-      float totalGlow = 0.0;
-      int numGlowSquares = 5;
-      
-      // Calculate square size: half the chip length in UV space
-      // Chip dimensions are in pixels, but we work in UV space (0-1)
-      // Half the chip width in UV space = 0.5
-      float glowSize = 0.5; // Half the chip length
-      
-      for (int i = 0; i < 5; i++) {
-        // Generate pseudo-random positions based on time and index
-        float idx = float(i);
-        vec2 seed = vec2(u_time * 0.3 + idx * 7.3, idx * 11.7);
-        vec2 glowCenter = vec2(
-          random(seed),
-          random(seed + vec2(1.0, 0.0))
-        );
-        
-        // Random time offset for pulsing
-        float timeOffset = random(seed + vec2(2.0, 3.0)) * 6.28;
-        
-        totalGlow += getGlowSquareIntensity(uv, glowCenter, glowSize, timeOffset);
-      }
+    // Calculate Y position within the slot animation area (0-1, where 0.5 is center)
+    float innerHeight = 1.0 - 2.0 * borderHeightUV;
+    float normalizedY = (adjustedTexCoord.y - borderHeightUV) / innerHeight;
     
-      // Clamp total glow intensity
-      totalGlow = clamp(totalGlow, 0.0, 1.0);
-      
-      // Apply glow: use glowIntensity directly (0.0 = no glow, 1.0 = 100% opacity flash)
-      // When glowIntensity is 1.0, the glow color completely replaces the chip color in glowing areas
-      float glowOpacity = clamp(u_glowIntensity, 0.0, 1.0);
-      vec3 glowColor = mix(chipColor, u_glowColor, glowOpacity * totalGlow);
-      
-      fragColor = vec4(glowColor, v_opacity);
-    } else {
-      // Other faces render normally
-      fragColor = vec4(chipColor, v_opacity);
+    // Single linear gradient: distance from center (0.5)
+    float distanceFromCenter = abs(normalizedY - 0.5) * 2.0; // 0 at center, 1 at edges
+    
+    // Exponential gradient: e^(-8 * distance^2)
+    float exponentialFactor = exp(-8.0 * distanceFromCenter * distanceFromCenter);
+    
+    // Blend between top/bottom color and center color
+    vec3 gradientColor = mix(topBottomColor, centerColor, exponentialFactor);
+    
+    // Draw 2 vertical separator lines dividing into 3 equal columns
+    // Separator color: #8b6f47 (139, 111, 71)
+    vec3 separatorColor = vec3(139.0 / 255.0, 111.0 / 255.0, 71.0 / 255.0);
+    float separatorThickness = 1.0 / (originalHalfWidth * 2.0);
+    
+    // Use already calculated innerWidth and normalizedX from above (for column detection)
+    
+    // Column boundaries: 1/3 and 2/3
+    float col1Boundary = 1.0 / 3.0;
+    float col2Boundary = 2.0 / 3.0;
+    
+    // Check if we're in a separator line
+    bool inSeparator1 = abs(normalizedX - col1Boundary) < separatorThickness;
+    bool inSeparator2 = abs(normalizedX - col2Boundary) < separatorThickness;
+    
+    // Start with gradient background
+    vec3 chipColor = gradientColor;
+    
+    // Draw separators on top of gradient
+    if (inSeparator1 || inSeparator2) {
+      chipColor = separatorColor;
     }
+    
+    // Apply numbers on top (texture only contains numbers now)
+    // Numbers are black, so we use texture alpha to blend
+    chipColor = mix(chipColor, textureColor.rgb, textureColor.a);
+    
+    // Calculate glow as a separate layer that will be applied on top
+    vec3 glowLayer = vec3(0.0); // Separate glow layer
+    if (u_glowEnabled > 0.5) {
+      // New glow system: spreads from center with different rates on X/Y axes
+      // Reuse already calculated innerWidth and innerHeight
+      float innerHeight = 1.0 - 2.0 * borderHeightUV;
+      
+      // Normalize adjustedTexCoord to [0, 1] range for glow calculation
+      vec2 normalizedGlowUV = vec2(
+        normalizedX, // Reuse already calculated normalizedX
+        (adjustedTexCoord.y - borderHeightUV) / innerHeight
+      );
+      
+      // Center is at 0.5, 0.5 in normalized space
+      vec2 center = vec2(0.5, 0.5);
+      vec2 distFromCenter = abs(normalizedGlowUV - center);
+      
+      // Glow spread rates
+      float xSpreadRate = 5.0; // Fast spread on X axis
+      float ySpreadRate = 2.0; // Slow spread on Y axis
+      
+      // Calculate coverage based on intensity
+      float coverageX = max(u_glowIntensity * xSpreadRate, 0.001);
+      float coverageY = max(u_glowIntensity * ySpreadRate, 0.001);
+      
+      // Calculate distance in coverage space (elliptical)
+      float distInCoverageX = distFromCenter.x / coverageX;
+      float distInCoverageY = distFromCenter.y / coverageY;
+      float distInCoverage = max(distInCoverageX, distInCoverageY);
+      
+      // Calculate glow factor (1.0 at center, 0.0 at edge)
+      float glowFactor = 1.0 - smoothstep(0.0, 1.0, clamp(distInCoverage, 0.0, 1.0));
+      glowFactor = max(0.0, glowFactor);
+      
+      // Calculate glow opacity with subtle, gradual gradient increase
+      // Use a smooth curve that starts subtle and gradually increases
+      float glowOpacity = u_glowIntensity * glowFactor;
+      
+      // Apply a gentle exponential curve for subtle gradient effect
+      // This makes the glow appear gradually as intensity increases
+      // Lower exponent = more gradual/subtle transition
+      float opacityExponent = 1.5; // Gradual curve
+      glowOpacity = pow(glowOpacity, 1.0 / opacityExponent);
+      
+      // Scale for subtlety - make it visible but gradual
+      // The glow should be visible but subtle, gradually increasing with intensity
+      glowOpacity = glowOpacity * 1.2; // Visible multiplier
+      glowOpacity = clamp(glowOpacity, 0.0, 1.0);
+      
+      // Create glow layer with subtle application
+      // The color will blend gradually as intensity increases
+      glowLayer = u_glowColor * glowOpacity;
+      
+      // Handle number texture partial glow effect
+      // Check if we're in a number area
+      bool isNumberArea = textureColor.a > 0.5;
+      
+      if (isNumberArea) {
+        // Detect number edges
+        float texelSize = 1.0 / 900.0;
+        float alphaCenter = textureColor.a;
+        float alphaRight = texture(u_texture, numberUV + vec2(texelSize, 0.0)).a;
+        float alphaLeft = texture(u_texture, numberUV + vec2(-texelSize, 0.0)).a;
+        float alphaUp = texture(u_texture, numberUV + vec2(0.0, texelSize)).a;
+        float alphaDown = texture(u_texture, numberUV + vec2(0.0, -texelSize)).a;
+        
+        float gradX = abs(alphaRight - alphaLeft);
+        float gradY = abs(alphaUp - alphaDown);
+        float gradientMagnitude = sqrt(gradX * gradX + gradY * gradY);
+        
+        float edgeFactor = clamp(gradientMagnitude * 10.0, 0.0, 1.0);
+        float alphaBasedEdgeDist = 1.0 - smoothstep(0.0, 1.0, alphaCenter);
+        float numberEdgeDist = mix(alphaBasedEdgeDist, edgeFactor, 0.5);
+        
+        // Define zones: Inner 60%, Middle 20%, Outer 20%
+        float innerZone = 0.4;
+        float outerZone = 0.6;
+        
+        float numberGlowFactor = 0.0;
+        if (numberEdgeDist < innerZone) {
+          // Inner 60%: no glow
+          numberGlowFactor = 0.0;
+        } else if (numberEdgeDist < outerZone) {
+          // Middle 20%: linear transition
+          float t = (numberEdgeDist - innerZone) / (outerZone - innerZone);
+          numberGlowFactor = t;
+        } else {
+          // Outer 20%: full glow
+          numberGlowFactor = 1.0;
+        }
+        
+        // Apply number-specific glow factor to the glow layer
+        glowLayer = glowLayer * numberGlowFactor;
+      }
+    }
+    
+    // Apply glow layer on top of chipColor with subtle, gradual gradient blending
+    // Use screen blend + additive for visible but subtle glow effect
+    vec3 finalColor = chipColor;
+    if (u_glowEnabled > 0.5) {
+      // Screen blend: makes glow more visible on dark areas
+      // This creates a subtle, gradual effect
+      vec3 screenBlend = 1.0 - (1.0 - chipColor) * (1.0 - glowLayer);
+      
+      // Scale the glow layer based on intensity for gradual appearance
+      // At low intensity, glow is more subtle; at high intensity, more visible
+      float intensityFactor = smoothstep(0.0, 1.0, u_glowIntensity);
+      float glowScale = 0.3 + (intensityFactor * 0.5); // Range: 0.3 to 0.8 for subtlety
+      
+      // Apply screen blend with scaled glow for gradual effect
+      vec3 scaledGlowLayer = glowLayer * glowScale;
+      vec3 screenBlendScaled = 1.0 - (1.0 - chipColor) * (1.0 - scaledGlowLayer);
+      
+      // Add a small amount of direct additive for extra subtlety
+      // This creates a gentle gradient effect
+      finalColor = screenBlendScaled + scaledGlowLayer * 0.2; // Small additive (20%)
+      finalColor = clamp(finalColor, 0.0, 1.0);
+    }
+    
+    // Final output
+    fragColor = vec4(finalColor, v_opacity);
   }
 `;

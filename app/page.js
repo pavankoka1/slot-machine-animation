@@ -15,7 +15,7 @@ export default function Home() {
     step1: {
       durationMs: 0,
       startScale: 0,
-      endScale: 0.5,
+      endScale: 0,
       startRotationX: -20,
       endRotationX: 0,
       startRotationY: -180,
@@ -45,17 +45,17 @@ export default function Home() {
       startOpacity: 1,
       endOpacity: 1,
     },
-    chipThickness: 100,
+    chipThickness: 60,
     color: { r: 166, g: 96, b: 37 },
     glowColor: { r: 255, g: 215, b: 0 },
     glowEnabled: false,
     glowIntensity: 1,
-    scrollSpeed: 10,
+    scrollSpeed: 50,
     glowFadeDurationMs: 1000,
     step2StartGlowCoverage: 0.9, // 90% at start of step 2
     step2EndGlowCoverage: 1.0, // 100% at end of step 2
     step3EndGlowCoverage: 0.65, // 65% at end of step 3
-    stopTargetNumbers: [0, 0, 3], // Target numbers for each column
+    stopTargetNumbers: [9, 0, 1], // Target numbers for each column
     stopDelayAfterStep3Ms: 1000, // Delay before starting stop animation
     stopDurationMs: 2000, // Duration of stop animation
   });
